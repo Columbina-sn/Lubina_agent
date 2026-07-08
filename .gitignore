@@ -1,0 +1,13 @@
+# Node.js
+node_modules/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Build output (Vite — 当前未使用，前端直接读 src/)
+dist/
+
+# OS
+.DS_Store
+Thumbs.db

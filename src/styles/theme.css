@@ -1,0 +1,530 @@
+/* ============================================================
+   Lubina ——「深空月夜」设计系统 v3
+   配色严格参考 前端UI颜色设计参考.html
+   ============================================================ */
+
+/* ===== CSS 变量 — 亮色模式 ===== */
+:root {
+  /* ── 背景 / 中性色（精确来自参考设计）── */
+  --bg-page: #f7f6fa;
+  --bg-page-gradient: linear-gradient(160deg, #f7f6fa 0%, #eeecf5 100%);
+  --bg-card: #ffffff;
+  --bg-card-trans: rgba(247, 246, 250, 0.85);
+  --bg-input: #ffffff;
+  --border-light: #e4e2ed;
+  --border-card: #e4e2ed;
+  --neutral-gray: #e4e2ed;
+  --divider: #ecebf2;
+
+  /* ── 主品牌色（精确：color-accent → primary）── */
+  --primary: #8a7fc2;
+  --primary-hover: #9a8fd6;
+  --primary-active: #7a6fb5;
+  --primary-disabled: #c5bde6;
+  --primary-light: rgba(138, 127, 194, 0.08);
+  --primary-glow: rgba(138, 127, 194, 0.20);
+  --primary-gradient: linear-gradient(135deg, #b8a8e0 0%, #a9b4e5 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #c8baf0 0%, #b9c4f5 100%);
+  --primary-gradient-vertical: linear-gradient(180deg, #b8a8e0 0%, #a9b4e5 100%);
+
+  /* ── 辅助色（精确：btn-border → secondary）── */
+  --secondary: #d8d4e6;
+  --secondary-light: rgba(216, 212, 230, 0.15);
+  --secondary-gradient: linear-gradient(135deg, #c5bde6 0%, #d8d4e6 100%);
+
+  /* ── 功能色（精确来自参考设计）── */
+  --accent: #c99aa8;
+  --accent-light: #e0c4d0;
+  --accent-gradient: linear-gradient(135deg, #c99aa8 0%, #e0c4d0 100%);
+  --accent-glow: rgba(201, 154, 168, 0.15);
+
+  --info: #7a93c9;
+  --info-light: rgba(122, 147, 201, 0.08);
+
+  --color-success: #9cb5c9;
+
+  /* ── 文字层级（精确来自参考设计）── */
+  --text-h1: #2a2836;
+  --text-body: #6b687a;
+  --text-sub: #9a97ab;
+  --text-tip: #b5b2c4;
+
+  /* ── 按钮边框色（精确：参考设计 btn-border）── */
+  --btn-border: #d8d4e6;
+
+  /* ── 阴影 ── */
+  --shadow-sm: 0 2px 8px rgba(138, 127, 194, 0.06);
+  --shadow-md: 0 4px 16px rgba(138, 127, 194, 0.10);
+  --shadow-lg: 0 8px 32px rgba(138, 127, 194, 0.14);
+  --shadow-input: 0 0 0 3px rgba(138, 127, 194, 0.15);
+
+  /* ── 圆角 ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* ── 过渡 ── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-fast: 150ms var(--ease-out);
+  --transition-normal: 250ms var(--ease-out);
+  --transition-slow: 400ms var(--ease-out);
+
+  /* ═══════════════════════════════════════════
+     气泡色彩（精确来自参考设计 6 种气泡）
+     ═══════════════════════════════════════════ */
+
+  /* bubble-normal → AI 一般消息 */
+  --bubble-normal-bg: linear-gradient(135deg, #f3f1fb 0%, #f0f2fa 100%);
+  --bubble-normal-border: #e6e3f2;
+
+  /* bubble-read → 读取文件 / 信息展示 */
+  --bubble-read-bg: linear-gradient(135deg, #eef3fb 0%, #eef1fa 100%);
+  --bubble-read-border: #dde4f2;
+
+  /* bubble-option → AI 提供选项 */
+  --bubble-option-bg: linear-gradient(135deg, #f5f0fa 0%, #f1f0f9 100%);
+  --bubble-option-border: #e7e0f2;
+
+  /* bubble-edit → 修改编辑文件 */
+  --bubble-edit-bg: linear-gradient(135deg, #faf0f3 0%, #f7f0f8 100%);
+  --bubble-edit-border: #f2e1e8;
+
+  /* bubble-exec → 执行命令 */
+  --bubble-exec-bg: linear-gradient(135deg, #eef1fa 0%, #edf0f8 100%);
+  --bubble-exec-border: #dde2f0;
+
+  /* bubble-done → 任务完成 */
+  --bubble-done-bg: linear-gradient(135deg, #f6f4ee 0%, #f3f2f8 100%);
+  --bubble-done-border: #ebe6da;
+
+  /* 用户消息气泡（精确：参考设计 btn-primary 即用户气泡） */
+  --bubble-user-bg: linear-gradient(135deg, #b8a8e0 0%, #a9b4e5 100%);
+
+  /* ═══════════════════════════════════════════
+     玻璃态与面板渐变
+     ═══════════════════════════════════════════ */
+
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(228, 226, 237, 0.45);
+  --glass-blur: blur(16px);
+
+  --gradient-sidebar: linear-gradient(180deg, #f3f1fb 0%, #eeecf5 50%, #eae7f2 100%);
+  --gradient-activity-bar: linear-gradient(180deg, #1e1d28 0%, #252432 30%, #1e1d28 100%);
+  --gradient-file-tree: linear-gradient(180deg, #f7f6fa 0%, #f0eef7 100%);
+  --gradient-card: linear-gradient(135deg, #ffffff 0%, #f7f6fa 100%);
+  --gradient-divider: linear-gradient(90deg, transparent, #e4e2ed, transparent);
+
+  /* ── 编辑器 ── */
+  --editor-bg: #faf9fd;
+  --editor-gutter-bg: #f0eef7;
+  --editor-gutter-text: #b5b2c4;
+  --editor-line-active: rgba(138, 127, 194, 0.06);
+  --editor-text: #6b687a;
+
+  /* ── 导航栏 ── */
+  --navbar-bg: rgba(255, 255, 255, 0.72);
+  --navbar-border: rgba(228, 226, 237, 0.6);
+  --navbar-height: 44px;
+}
+
+/* ===== CSS 变量 — 深色模式（精确来自参考设计）===== */
+[data-theme="dark"] {
+  /* ── 背景 / 中性色 ── */
+  --bg-page: #1e1d28;
+  --bg-page-gradient: linear-gradient(160deg, #1e1d28 0%, #181722 60%, #252432 100%);
+  --bg-card: #252432;
+  --bg-card-trans: rgba(37, 36, 50, 0.70);
+  --bg-input: #252432;
+  --border-light: #323042;
+  --border-card: #323042;
+  --neutral-gray: #323042;
+  --divider: #2c2a3a;
+
+  /* ── 主品牌色 ── */
+  --primary: #a79bd6;
+  --primary-hover: #b8aae6;
+  --primary-active: #968ac8;
+  --primary-disabled: #6b5c9e;
+  --primary-light: rgba(167, 155, 214, 0.12);
+  --primary-glow: rgba(167, 155, 214, 0.25);
+  --primary-gradient: linear-gradient(135deg, #6b5c9e 0%, #5c6ea8 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #7b6cb0 0%, #6c7eb8 100%);
+  --primary-gradient-vertical: linear-gradient(180deg, #6b5c9e 0%, #5c6ea8 100%);
+
+  /* ── 辅助色 ── */
+  --secondary: #423f55;
+  --secondary-light: rgba(66, 63, 85, 0.15);
+  --secondary-gradient: linear-gradient(135deg, #5c5a72 0%, #423f55 100%);
+
+  /* ── 功能色 ── */
+  --accent: #d9aab8;
+  --accent-light: #e8c8d2;
+  --accent-gradient: linear-gradient(135deg, #d9aab8 0%, #e8c8d2 100%);
+  --accent-glow: rgba(217, 170, 184, 0.15);
+
+  --info: #97afdd;
+  --info-light: rgba(151, 175, 221, 0.08);
+
+  --color-success: #aec9dd;
+
+  /* ── 文字层级 ── */
+  --text-h1: #e4e2ee;
+  --text-body: #a8a5ba;
+  --text-sub: #76738a;
+  --text-tip: #76738a;
+
+  /* ── 按钮边框 ── */
+  --btn-border: #423f55;
+
+  /* ── 阴影 ── */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --shadow-input: 0 0 0 3px rgba(167, 155, 214, 0.25);
+
+  /* ── 玻璃态 ── */
+  --glass-bg: rgba(37, 36, 50, 0.55);
+  --glass-bg-strong: rgba(37, 36, 50, 0.78);
+  --glass-border: rgba(50, 48, 66, 0.45);
+
+  /* ═══════════════════════════════════════════
+     气泡色彩 — 深色（精确来自参考设计）
+     ═══════════════════════════════════════════ */
+
+  --bubble-normal-bg: linear-gradient(135deg, #2d2b3d 0%, #2b2d3d 100%);
+  --bubble-normal-border: #3a374d;
+
+  --bubble-read-bg: linear-gradient(135deg, #2a2e3d 0%, #2b2d3c 100%);
+  --bubble-read-border: #373c4e;
+
+  --bubble-option-bg: linear-gradient(135deg, #302c3e 0%, #2d2b3d 100%);
+  --bubble-option-border: #3e3850;
+
+  --bubble-edit-bg: linear-gradient(135deg, #342b36 0%, #312b38 100%);
+  --bubble-edit-border: #46384a;
+
+  --bubble-exec-bg: linear-gradient(135deg, #292d3c 0%, #2a2c3b 100%);
+  --bubble-exec-border: #363c4d;
+
+  --bubble-done-bg: linear-gradient(135deg, #323036 0%, #2e2c38 100%);
+  --bubble-done-border: #44404a;
+
+  /* 用户消息气泡 — 深色 */
+  --bubble-user-bg: linear-gradient(135deg, #6b5c9e 0%, #5c6ea8 100%);
+
+  /* ── 面板渐变 ── */
+  --gradient-sidebar: linear-gradient(180deg, #1e1d28 0%, #181722 50%, #1e1d28 100%);
+  --gradient-file-tree: linear-gradient(180deg, #1e1d28 0%, #1c1b26 100%);
+  --gradient-card: linear-gradient(135deg, #252432 0%, #1e1d28 100%);
+  --gradient-divider: linear-gradient(90deg, transparent, #323042, transparent);
+
+  /* ── 编辑器 ── */
+  --editor-bg: #1c1b26;
+  --editor-gutter-bg: #181722;
+  --editor-gutter-text: #5e5b72;
+  --editor-line-active: rgba(167, 155, 214, 0.10);
+  --editor-text: #a8a5ba;
+
+  /* ── 导航栏 ── */
+  --navbar-bg: rgba(30, 29, 40, 0.85);
+  --navbar-border: rgba(50, 48, 66, 0.5);
+}
+
+/* ===== 全局重置 ===== */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 13.5px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+  background: var(--bg-page);
+  color: var(--text-body);
+  min-height: 100vh;
+  line-height: 1.6;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ===== 滚动条美化 ===== */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--neutral-gray); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-sub); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ===== 排版 ===== */
+h1, h2, h3, h4 {
+  color: var(--text-h1);
+  font-weight: 600;
+  line-height: 1.3;
+}
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.15rem; }
+
+a {
+  color: var(--info);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+a:hover { text-decoration: underline; }
+
+/* ===== 按钮体系 ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  white-space: nowrap;
+  user-select: none;
+  font-family: inherit;
+}
+.btn:active { transform: scale(0.97); }
+
+.btn-primary {
+  background: var(--primary-gradient);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--primary-glow);
+}
+.btn-primary:hover {
+  background: var(--primary-gradient-hover);
+  box-shadow: 0 4px 16px var(--primary-glow);
+  transform: translateY(-1px);
+}
+.btn-primary:active {
+  background: var(--primary-active);
+  transform: translateY(0);
+  box-shadow: none;
+}
+.btn-primary:disabled {
+  background: var(--primary-disabled);
+  cursor: not-allowed;
+  opacity: 0.65;
+  box-shadow: none;
+  transform: none;
+}
+
+.btn-secondary {
+  background: var(--secondary-light);
+  color: var(--primary);
+  border: 1px solid transparent;
+}
+.btn-secondary:hover {
+  background: var(--secondary-gradient);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.btn-accent {
+  background: var(--accent-gradient);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+.btn-accent:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-sub);
+  padding: 7px 11px;
+}
+.btn-ghost:hover {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+.btn-sm { padding: 5px 10px; font-size: 0.78rem; border-radius: var(--radius-sm); }
+.btn-lg { padding: 11px 26px; font-size: 1rem; }
+.btn-icon { width: 34px; height: 34px; padding: 0; border-radius: var(--radius-sm); }
+
+/* ===== 输入框 ===== */
+.input {
+  width: 100%;
+  padding: 9px 13px;
+  background: var(--bg-input);
+  border: 1.5px solid #e0dde9;
+  border-radius: var(--radius-md);
+  color: var(--text-body);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+  outline: none;
+}
+.input::placeholder { color: var(--text-tip); }
+.input:focus {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-input);
+}
+
+/* ===== 标签 ===== */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.tag-primary { background: var(--primary-light); color: var(--primary); }
+.tag-accent { background: var(--accent-gradient); color: #fff; }
+.tag-info { background: var(--info); color: #fff; }
+
+/* ===== 卡片 ===== */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ===== 分割线 ===== */
+.divider {
+  height: 1px;
+  background: var(--border-light);
+  border: none;
+  margin: 12px 0;
+}
+
+/* ===== 工具提示 ===== */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute; left: 110%; top: 50%;
+  transform: translateY(-50%);
+  padding: 5px 10px;
+  background: var(--text-h1);
+  color: var(--bg-card);
+  font-size: 0.73rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--transition-fast);
+  z-index: 1000;
+}
+[data-tooltip]:hover::after { opacity: 1; }
+
+/* ===== 动画 ===== */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-fade-in  { animation: fadeIn 0.3s var(--ease-out); }
+.animate-slide-left { animation: slideInLeft 0.25s var(--ease-out); }
+.animate-fade-scale { animation: fadeInScale 0.2s var(--ease-spring); }
+
+/* ===== 加载骨架屏 ===== */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-input) 25%, var(--border-light) 50%, var(--bg-input) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* ===== Markdown 渲染区 ===== */
+.markdown-body {
+  line-height: 1.75;
+  word-break: break-word;
+}
+.markdown-body p { margin-bottom: 0.6em; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body code {
+  background: var(--primary-light);
+  color: var(--primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.88em;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+}
+.markdown-body pre {
+  background: var(--text-h1);
+  color: var(--bg-card);
+  padding: 14px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.markdown-body pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: 0.85em;
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.6em;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--primary);
+  padding-left: 12px;
+  color: var(--text-sub);
+  margin: 8px 0;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border-light);
+  padding: 6px 10px;
+  text-align: left;
+}
+.markdown-body th {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* ===== 打字机光标 ===== */
+.typing-cursor::after {
+  content: "▊";
+  color: var(--primary);
+  animation: pulse 1s infinite;
+}
+
+/* ===== 工具类 ===== */
+.hidden { display: none !important; }
+.flex-center { display: flex; align-items: center; justify-content: center; }
+.text-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

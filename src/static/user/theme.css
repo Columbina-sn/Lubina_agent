@@ -1,0 +1,28 @@
+/* ============================================================
+   static/user/theme.css —— 用户自定义主题
+   此文件由用户（或 AI Agent）编辑，实现个性化样式
+   所有规则会覆盖 static/origin/theme.css 中的默认样式
+
+   InnoSetup 更新安装时会跳过此文件，不会覆盖用户自定义
+   ============================================================ */
+
+/* 示例：修改主色调为绿色系 */
+/*
+:root {
+  --primary: #3A8A5C;
+  --primary-hover: #45A06A;
+  --primary-active: #2E7048;
+  --primary-gradient: linear-gradient(135deg, #3A8A5C 0%, #5AB87A 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #45A06A 0%, #6CC88A 100%);
+}
+*/
+
+/* 示例：添加自定义背景图 */
+/*
+body {
+  background-image: url('your-background.jpg');
+  background-size: cover;
+}
+*/
+
+/* 你的自定义样式写在这里 */
