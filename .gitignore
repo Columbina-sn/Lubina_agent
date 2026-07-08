@@ -8,6 +8,14 @@ src-tauri/gen/
 # Build output (Vite — 当前未使用，前端直接读 src/)
 dist/
 
+# 项目文档（仅本地保留，不提交到仓库）
+CLAUDE.md
+开发日志.md
+项目初始文档.md
+输入内容.md
+初始prompt.md
+前端UI颜色设计参考.html
+
 # OS
 .DS_Store
 Thumbs.db
