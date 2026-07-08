@@ -216,6 +216,58 @@ body {
   margin: 4px 8px;
 }
 
+
+/* ===== Tauri 自定义拖拽区域（配合 data-tauri-drag-region）===== */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+[data-tauri-no-drag-region],
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] a {
+  -webkit-app-region: no-drag;
+}
+
+/* ===== 窗口控制按钮（最小化 / 最大化 / 关闭）===== */
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 10px;
+  margin-right: -6px;
+}
+
+.win-btn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.win-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.win-btn:hover {
+  background: var(--bg-input, rgba(0, 0, 0, 0.05));
+  color: var(--text-body);
+}
+
+.win-btn-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
 /* ===== 1. 文件浏览器面板 ===== */
 .file-explorer {
   width: 240px;

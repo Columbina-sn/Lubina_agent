@@ -5,8 +5,8 @@
    ============================================================ */
 
 const Bridge = (() => {
-  /** 检测是否在 Tauri 环境中 */
-  const isTauri = () => typeof window !== 'undefined' && window.__TAURI__ != null;
+  /** 检测是否在 Tauri 环境中（Tauri v2 注入 __TAURI_INTERNALS__）*/
+  const isTauri = () => typeof window !== 'undefined' && window.__TAURI_INTERNALS__ != null;
 
   /**
    * 安全调用 Tauri API，降级到浏览器行为
@@ -93,28 +93,32 @@ const Bridge = (() => {
     }, null);
   }
 
-  // ===== 窗口控制 =====
+  // ===== 窗口控制（Tauri v2 直接 IPC — 与 @tauri-apps/api 内部逻辑一致）=====
+  /**
+   * 直接使用 window.__TAURI_INTERNALS__.invoke() 调用窗口 IPC 命令。
+   * 这是 @tauri-apps/api/window.js 内部的实现方式，零依赖、零导入。
+   * 命令格式：plugin:window|<操作>，参数：{ label: "窗口标签" }
+   */
+  function _winLabel() {
+    return window.__TAURI_INTERNALS__.metadata.currentWindow.label;
+  }
+
   async function windowMinimize() {
-    return _safeCall(async () => {
-      await window.__TAURI__.window.appWindow.minimize();
-    });
+    return _safeCall(() =>
+      window.__TAURI_INTERNALS__.invoke('plugin:window|minimize', { label: _winLabel() })
+    );
   }
 
   async function windowToggleMaximize() {
-    return _safeCall(async () => {
-      const win = window.__TAURI__.window.appWindow;
-      if (await win.isMaximized()) {
-        await win.unmaximize();
-      } else {
-        await win.maximize();
-      }
-    });
+    return _safeCall(() =>
+      window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', { label: _winLabel() })
+    );
   }
 
   async function windowClose() {
-    return _safeCall(async () => {
-      await window.__TAURI__.window.appWindow.close();
-    });
+    return _safeCall(() =>
+      window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: _winLabel() })
+    );
   }
 
   // ===== 公开 API =====
