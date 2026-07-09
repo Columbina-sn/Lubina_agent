@@ -17,6 +17,9 @@ CLAUDE.md
 知识库.md
 前端UI颜色设计参考.html
 
+# SQLite databases (test data, auto-generated)
+*.db
+
 # OS
 .DS_Store
 Thumbs.db

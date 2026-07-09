@@ -662,9 +662,9 @@ body {
   gap: 8px;
 }
 .toast-info    { background: var(--info); }
-.toast-success { background: var(--agent-success-border); }
+.toast-success { background: var(--primary-gradient); }
 .toast-error   { background: var(--accent-gradient); }
-.toast-warning { background: var(--agent-warning-btn); }
+.toast-warning { background: #d4902a; }
 
 /* ===== 模态框 ===== */
 .modal-overlay {

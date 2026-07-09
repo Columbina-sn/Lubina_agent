@@ -1,28 +1,141 @@
 /* ============================================================
-   chat.js v4 — 基于 chat-design.html 设计稿落地
-   紧凑 · 连续AI消息不重复头像 · 长间隔 · 删除确认模态框
+   chat.js v5 — 真实 AI 流式聊天
+
+   模式切换：ask / plan / agent（当前均透传用户消息到 AI）
+   模型切换：从已启用的供应商中选择模型
+   发送后锁定模式+模型，需新建对话才能更改
+   流式回复统一用 info 气泡包裹渲染
+   AI 消息使用 {info, action, warning, success, error, options} 类型
+   连续 AI 消息不重复头像
    ============================================================ */
 
 const Chat = (() => {
   let conversations = [];
   let activeConversationId = null;
   let isGenerating = false;
-  let demoRunning = false;
-  let lastRole = null; // 用于判断是否连续 AI 消息
+  let lastRole = null;
+
+  // 当前对话的模式和模型
+  let chatMode = 'ask';
+  let chatModelProviderId = null;   // provider_id
+  let chatModelName = null;         // 具体的 model_name
+  let chatLocked = false;           // 发送消息后锁定
+  let abortController = null;
 
   function mount() {
     _loadFromStorage();
     if (conversations.length === 0) _createConversation('新对话');
     _renderConversationList();
     _switchConversation(activeConversationId || conversations[0]?.id);
+    _loadModelSelector();
+    _updateToolbarState();
   }
 
-  function destroy() { _saveToStorage(); demoRunning = false; lastRole = null; }
+  function destroy() {
+    if (abortController) { abortController.abort(); abortController = null; }
+    _saveToStorage();
+    lastRole = null;
+  }
+
+  // ===== 模式 & 模型管理 =====
+
+  async function _loadModelSelector() {
+    const select = document.getElementById('chatModelSelect');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">加载中...</option>';
+
+    try {
+      const providers = await api.get('/api/providers');
+      const enabledProviders = (providers || []).filter(p => p.is_enabled);
+      const options = [];
+
+      for (const p of enabledProviders) {
+        const enabledModels = (p.models || []).filter(m => m.is_enabled);
+        for (const m of enabledModels) {
+          const value = `${p.id}::${m.model_name}`;
+          options.push({ value, label: `${p.name} · ${m.display_name || m.model_name}`, providerId: p.id, modelName: m.model_name });
+        }
+      }
+
+      if (options.length === 0) {
+        select.innerHTML = '<option value="">无可用模型（请先去设置页配置供应商）</option>';
+        return;
+      }
+
+      select.innerHTML = options.map(o => `<option value="${o.value}">${_esc(o.label)}</option>`).join('');
+
+      // 恢复上次选择或默认
+      if (chatModelProviderId && chatModelName) {
+        const matchVal = `${chatModelProviderId}::${chatModelName}`;
+        if (select.querySelector(`option[value="${matchVal}"]`)) {
+          select.value = matchVal;
+          return;
+        }
+      }
+      // 默认选第一个
+      select.selectedIndex = 0;
+      const firstVal = select.value;
+      if (firstVal) {
+        const [pid, mname] = firstVal.split('::');
+        chatModelProviderId = pid;
+        chatModelName = mname;
+      }
+    } catch (_) {
+      select.innerHTML = '<option value="">加载失败</option>';
+    }
+  }
+
+  function setMode(mode) {
+    if (chatLocked) return;
+    chatMode = mode;
+    document.querySelectorAll('.chat-mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+  }
+
+  function setModel(value) {
+    if (chatLocked) return;
+    if (!value) return;
+    const [pid, mname] = value.split('::');
+    if (pid && mname) {
+      chatModelProviderId = pid;
+      chatModelName = mname;
+    }
+  }
+
+  function _lock() {
+    chatLocked = true;
+    _updateToolbarState();
+  }
+
+  function _unlock() {
+    chatLocked = false;
+    _updateToolbarState();
+  }
+
+  function _updateToolbarState() {
+    const modeBtns = document.querySelectorAll('.chat-mode-btn');
+    const select = document.getElementById('chatModelSelect');
+    modeBtns.forEach(b => { b.disabled = chatLocked; b.style.opacity = chatLocked ? '0.5' : ''; b.style.pointerEvents = chatLocked ? 'none' : ''; });
+    if (select) { select.disabled = chatLocked; select.style.opacity = chatLocked ? '0.5' : ''; select.style.pointerEvents = chatLocked ? 'none' : ''; }
+  }
 
   // ===== 对话 CRUD =====
+
   function _createConversation(title = '新对话') {
-    const conv = { id: `c_${Date.now()}_${Math.random().toString(36).slice(2,6)}`, title, messages: [], model: localStorage.getItem('lubina_model')||'deepseek-chat', createdAt: new Date().toISOString() };
-    conversations.unshift(conv); _saveToStorage(); return conv;
+    const conv = {
+      id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title, messages: [],
+      model: chatModelName || 'deepseek-v4-flash',
+      providerId: chatModelProviderId || '',
+      mode: chatMode,
+      createdAt: new Date().toISOString(),
+    };
+    conversations.unshift(conv);
+    _saveToStorage();
+    _unlock();
+    return conv;
   }
 
   function deleteConversation(id) {
@@ -50,87 +163,212 @@ const Chat = (() => {
   }
 
   function _getActiveConversation() { return conversations.find(c => c.id === activeConversationId) || null; }
+
   function _switchConversation(id) {
     activeConversationId = id; lastRole = null;
     const conv = _getActiveConversation();
     if (!conv) return;
-    _renderMessages(conv.messages); _renderConversationList(); _scrollToBottom();
+    // 恢复该对话的模式和模型
+    if (conv.mode) chatMode = conv.mode;
+    if (conv.providerId) chatModelProviderId = conv.providerId;
+    if (conv.model) chatModelName = conv.model;
+    // 如果该对话有用户消息，锁定
+    const hasUserMsg = (conv.messages || []).some(m => m.role === 'user');
+    if (hasUserMsg) { _lock(); } else { _unlock(); }
+    // 恢复 UI
+    setMode(chatMode);
+    if (chatModelProviderId && chatModelName) {
+      const select = document.getElementById('chatModelSelect');
+      if (select) {
+        const val = `${chatModelProviderId}::${chatModelName}`;
+        if (select.querySelector(`option[value="${val}"]`)) select.value = val;
+      }
+    }
+    _renderMessages(conv.messages);
+    _renderConversationList();
+    _scrollToBottom();
   }
 
-  // ===== 发送消息（演示 Agent 流程）=====
+  // ===== 发送消息（真实 API）=====
+
   async function sendMessage(content) {
     if (isGenerating || !content?.trim()) return;
     const conv = _getActiveConversation();
     if (!conv) return;
 
-    conv.messages.push({ role:'user', type:'user', content:content.trim(), timestamp:Date.now() });
-    if (conv.messages.filter(m=>m.role==='user').length === 1) {
-      conv.title = content.trim().slice(0,20) + (content.trim().length>20?'…':'');
+    // 如果没有设置模型，提示用户
+    if (!chatModelProviderId || !chatModelName) {
+      _showToast('请先在输入框左下角选择模型', 'warning');
+      return;
+    }
+
+    // 锁定模式和模型
+    _lock();
+    conv.mode = chatMode;
+    conv.providerId = chatModelProviderId;
+    conv.model = chatModelName;
+
+    // 添加用户消息
+    conv.messages.push({ role: 'user', type: 'user', content: content.trim(), timestamp: Date.now() });
+    if (conv.messages.filter(m => m.role === 'user').length === 1) {
+      conv.title = content.trim().slice(0, 20) + (content.trim().length > 20 ? '…' : '');
     }
     _renderMessages(conv.messages); _renderConversationList(); _scrollToBottom();
-    isGenerating = true; demoRunning = true; _updateInputState(true);
-    const taskName = content.trim().slice(0,15);
+    isGenerating = true;
+    _updateInputState(true);
 
-    const steps = [
-      { delay:3500, type:'info',    content:`了解了，我来处理这个任务：**${taskName}**。让我先读取相关文件…`, action:'正在分析任务' },
-      { delay:4000, type:'action',  content:`正在读取文件 \`src/config.json\`、\`src/utils.py\` …`, action:'正在读取文件' },
-      { delay:4000, type:'options', content:`分析完成。关于 **${taskName}**，我找到了以下几种处理方案：`,
-        options:[
-          { label:'方案 A：自动优化（推荐）', value:'方案A：自动优化' },
-          { label:'方案 B：手动逐步修改', value:'方案B：手动逐步修改' },
-          { label:'方案 C：仅生成修改建议', value:'方案C：仅生成修改建议' },
-        ]},
-    ];
+    // 创建流式 AI 消息占位（info 类型气泡）
+    const aiMsg = { role: 'assistant', type: 'info', content: '', timestamp: Date.now(), streaming: true };
+    conv.messages.push(aiMsg);
 
-    for (const s of steps) { if (!demoRunning) break; await _sleep(s.delay); if (!demoRunning) break;
-      conv.messages.push({ role:'assistant', type:s.type, content:s.content, timestamp:Date.now(), action:s.action, options:s.options });
-      _renderMessages(conv.messages); _scrollToBottom(); _notifyIfAway(); }
-  }
+    // 构建消息历史（只发 role + content）
+    const apiMessages = conv.messages
+      .filter(m => m.role === 'user' || (m.role === 'assistant' && !m.streaming && m.content))
+      .map(m => ({ role: m.role, content: m.content }));
 
-  function selectOption(value) {
-    if (!demoRunning) return; const conv = _getActiveConversation(); if (!conv) return;
-    conv.messages.push({ role:'user', type:'user', content:`选择：${value}`, timestamp:Date.now() });
-    _runDemoSteps([
-      { delay:3500, type:'warning', content:`你选择了 **${value}**。我将修改文件 \`src/utils.py\` 来实现这个方案，是否确认？` },
-    ], () => {
-      _runDemoSteps([
-        { delay:4000, type:'action', content:'正在修改文件 `src/utils.py` … 在第 42 行插入新函数 …', action:'正在编辑文件' },
-        { delay:4000, type:'success', content:'文件 `src/utils.py` 已成功修改（+15 行，-3 行）。' },
-        { delay:3500, type:'action', content:'正在执行验证命令 `python -m pytest tests/` …', action:'正在执行命令' },
-        { delay:4500, type:'success', content:'命令执行完成。全部 12 个测试通过，无报错。\n\n---\n**任务已完成。** 你可以打开 `src/utils.py` 查看修改内容。' },
-        { delay:3000, type:'info', content:'还有其他需要帮助的吗？' },
-      ], () => { isGenerating=false; demoRunning=false; _updateInputState(false); _saveToStorage(); });
-    });
-  }
+    try {
+      // 先渲染一次（用户气泡 + 空的 AI 占位气泡）
+      _renderMessages(conv.messages);
+      _scrollToBottom();
 
-  function confirmAction(allow) {
-    if (!demoRunning) return; const conv = _getActiveConversation(); if (!conv) return;
-    conv.messages.push({ role:'user', type:'user', content:allow?'确认执行':'取消操作', timestamp:Date.now() });
-    if (!allow) {
-      conv.messages.push({ role:'assistant', type:'error', content:'操作已取消。', timestamp:Date.now() });
-      _renderMessages(conv.messages); isGenerating=false; demoRunning=false; _updateInputState(false); _saveToStorage(); return;
+      // 流式渲染节流：每 ~60ms 更新一次 DOM，避免每字闪烁
+      let throttleTimer = null;
+      let pendingContent = '';
+
+      abortController = await _chatStream({
+        messages: apiMessages,
+        providerId: chatModelProviderId,
+        model: chatModelName,
+        mode: chatMode,
+        onDelta: (delta) => {
+          aiMsg.content += delta;
+          pendingContent += delta;
+
+          if (!throttleTimer) {
+            throttleTimer = setTimeout(() => {
+              throttleTimer = null;
+              // 直接更新最后一个气泡的 markdown-body，不重建整个消息列表
+              _updateLastBubble(aiMsg);
+              _scrollToBottom();
+            }, 60);
+          }
+        },
+        onDone: () => {
+          // 清除待处理的节流，立即渲染最终状态
+          if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+          aiMsg.streaming = false;
+          _updateLastBubble(aiMsg);
+          _scrollToBottom();
+          isGenerating = false;
+          abortController = null;
+          _updateInputState(false);
+          _saveToStorage();
+          _notifyIfAway();
+        },
+        onError: (err) => {
+          if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+          aiMsg.type = 'error';
+          aiMsg.content = aiMsg.content || `错误：${err.message || '请求失败'}`;
+          if (!aiMsg.content.startsWith('错误')) aiMsg.content = `错误：${aiMsg.content}`;
+          aiMsg.streaming = false;
+          isGenerating = false;
+          abortController = null;
+          _updateInputState(false);
+          // 错误时做全量重建（因为类型变了）
+          _renderMessages(conv.messages);
+          _saveToStorage();
+        },
+      });
+    } catch (err) {
+      aiMsg.type = 'error';
+      aiMsg.content = `错误：${err.message || '请求失败'}`;
+      aiMsg.streaming = false;
+      isGenerating = false;
+      abortController = null;
+      _updateInputState(false);
+      _renderMessages(conv.messages);
+      _saveToStorage();
     }
-    _runDemoSteps([
-      { delay:4000, type:'action', content:'正在修改文件 `src/utils.py` … 在第 42 行插入新函数 …', action:'正在编辑文件' },
-      { delay:4000, type:'success', content:'文件 `src/utils.py` 已成功修改（+15 行，-3 行）。' },
-      { delay:3500, type:'action', content:'正在执行验证命令 `python -m pytest tests/` …', action:'正在执行命令' },
-      { delay:4500, type:'success', content:'命令执行完成。全部 12 个测试通过。\n\n---\n**任务已完成。**' },
-      { delay:3000, type:'info', content:'还有其他需要帮助的吗？' },
-    ], () => { isGenerating=false; demoRunning=false; _updateInputState(false); _saveToStorage(); });
-  }
-
-  async function _runDemoSteps(steps, done) {
-    const conv = _getActiveConversation(); if (!conv) { done(); return; }
-    for (const s of steps) { if (!demoRunning) break; await _sleep(s.delay); if (!demoRunning) break;
-      conv.messages.push({ role:'assistant', type:s.type, content:s.content, timestamp:Date.now(), action:s.action, options:s.options });
-      _renderMessages(conv.messages); _scrollToBottom(); _notifyIfAway(); }
-    done();
   }
 
   function stopGenerating() {
-    demoRunning=false; isGenerating=false;
-    const conv=_getActiveConversation(); if(conv){const l=conv.messages[conv.messages.length-1];if(l?.streaming){l.streaming=false;if(!l.content)l.content='（已停止）';}}
-    _updateInputState(false); _saveToStorage();
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    isGenerating = false;
+    const conv = _getActiveConversation();
+    if (conv) {
+      const last = conv.messages[conv.messages.length - 1];
+      if (last?.streaming) {
+        last.streaming = false;
+        if (!last.content) last.content = '（已停止）';
+      }
+    }
+    _updateInputState(false);
+    _renderMessages((conv && conv.messages) || []);
+    _saveToStorage();
+  }
+
+  // ===== 流式 API 调用（前端直连后端 /api/chat/completions）=====
+
+  async function _chatStream(options) {
+    const { messages, providerId, model, mode, onDelta, onDone, onError } = options;
+    const controller = new AbortController();
+
+    try {
+      const response = await fetch(`${API_BASE}/api/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let errMsg = `请求失败 (${response.status})`;
+        try {
+          const errBody = await response.json();
+          errMsg = errBody.message || errMsg;
+        } catch (_) {}
+        onError(new Error(errMsg));
+        return controller;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === '[DONE]') { onDone(); return controller; }
+          try {
+            const json = JSON.parse(data);
+            // 检查是否是错误消息
+            if (json.error) {
+              onError(new Error(json.message || 'API 返回错误'));
+              return controller;
+            }
+            const delta = json.choices?.[0]?.delta?.content;
+            if (delta) onDelta(delta);
+          } catch (_) { /* 忽略解析失败的行 */ }
+        }
+      }
+      onDone();
+    } catch (err) {
+      if (err.name !== 'AbortError') onError(err);
+    }
+
+    return controller;
   }
 
   function _notifyIfAway() {
@@ -138,6 +376,7 @@ const Chat = (() => {
   }
 
   // ===== 渲染消息（连续AI不重复头像）=====
+
   function _renderMessages(messages) {
     const container = document.getElementById('messageContainer');
     if (!container) return;
@@ -151,7 +390,7 @@ const Chat = (() => {
       row.className = `message-row ${isUser ? 'user' : 'assistant'}`;
       row.setAttribute('data-index', index);
 
-      const showAvatar = isUser || (prevRole !== 'assistant'); // 只在用户消息或 AI 消息组第一条显示头像
+      const showAvatar = isUser || (prevRole !== 'assistant');
       const avatarCls = showAvatar ? (isUser ? 'user' : 'ai') : 'ghost';
       const avatarLabel = isUser ? '你' : 'AI';
 
@@ -170,25 +409,30 @@ const Chat = (() => {
   function _renderAIBubble(msg) {
     const type = msg.type || 'info';
     const typeLabels = {
-      info:{label:'',cls:'ai-info'},
-      action:{label:msg.action||'正在执行操作…',cls:'ai-action'},
-      warning:{label:'需要你的确认',cls:'ai-warning'},
-      success:{label:'操作完成',cls:'ai-success'},
-      error:{label:'操作失败',cls:'ai-error'},
-      options:{label:'请选择一个选项',cls:'ai-option'},
+      info: { label: '', cls: 'ai-info' },
+      action: { label: msg.action || '正在执行操作…', cls: 'ai-action' },
+      warning: { label: '需要你的确认', cls: 'ai-warning' },
+      success: { label: '操作完成', cls: 'ai-success' },
+      error: { label: '请求失败', cls: 'ai-error' },
+      options: { label: '请选择一个选项', cls: 'ai-option' },
     };
-    const tl = typeLabels[type]||typeLabels.info;
+    const tl = typeLabels[type] || typeLabels.info;
     let extra = '';
     if (tl.label) extra += `<div class="action-label">${tl.label}</div>`;
 
     // Markdown 内容
     let mdContent = msg.content || '';
     if (typeof marked !== 'undefined') {
-      mdContent = marked.parse(msg.content||'')||'';
+      try { mdContent = marked.parse(msg.content || '') || ''; } catch (_) { mdContent = _esc(msg.content || ''); }
     }
 
-    if (type==='warning') extra += `<div class="confirm-actions"><button class="confirm-btn confirm-btn-allow" onclick="Chat.confirmAction(true)">确认执行</button><button class="confirm-btn confirm-btn-deny" onclick="Chat.confirmAction(false)">取消</button></div>`;
-    if (type==='options' && msg.options) {
+    // 流式光标
+    if (msg.streaming) {
+      mdContent += '<span class="typing-cursor"></span>';
+    }
+
+    if (type === 'warning') extra += `<div class="confirm-actions"><button class="confirm-btn confirm-btn-allow" onclick="Chat.confirmAction(true)">确认执行</button><button class="confirm-btn confirm-btn-deny" onclick="Chat.confirmAction(false)">取消</button></div>`;
+    if (type === 'options' && msg.options) {
       const btns = msg.options.map(o => `<button class="option-btn" onclick="Chat.selectOption('${_escAttr(o.value)}')">${_esc(o.label)}</button>`).join('');
       extra += `<div class="option-buttons">${btns}</div>`;
     }
@@ -196,11 +440,38 @@ const Chat = (() => {
     return `<div class="msg-bubble ai-bubble ${tl.cls}">${extra}<div class="markdown-body">${mdContent}</div></div>`;
   }
 
+  /** 直接更新最后一个 AI 气泡的内容（不做全量重建，避免闪烁） */
+  function _updateLastBubble(msg) {
+    const container = document.getElementById('messageContainer');
+    if (!container) return;
+
+    // 找到最后一条 assistant 消息行
+    const rows = container.querySelectorAll('.message-row.assistant');
+    const lastRow = rows[rows.length - 1];
+    if (!lastRow) return;
+
+    const mdBody = lastRow.querySelector('.markdown-body');
+    if (!mdBody) return;
+
+    // 渲染 Markdown
+    let mdContent = msg.content || '';
+    if (typeof marked !== 'undefined') {
+      try { mdContent = marked.parse(msg.content || '') || ''; } catch (_) { mdContent = _esc(msg.content || ''); }
+    }
+
+    // 流式光标
+    if (msg.streaming) {
+      mdContent += '<span class="typing-cursor"></span>';
+    }
+
+    mdBody.innerHTML = mdContent;
+  }
+
   function _renderConversationList() {
     const list = document.getElementById('conversationList');
     if (!list) return;
     list.innerHTML = conversations.map(conv => `
-      <div class="conv-item ${conv.id===activeConversationId?'active':''}" onclick="Chat.switchTo('${conv.id}')">
+      <div class="conv-item ${conv.id === activeConversationId ? 'active' : ''}" onclick="Chat.switchTo('${conv.id}')">
         <svg class="conv-item-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <span class="conv-item-title">${_esc(conv.title)}</span>
         <button class="conv-item-delete" onclick="event.stopPropagation();Chat.deleteConversation('${conv.id}')" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -213,13 +484,8 @@ const Chat = (() => {
       <img class="welcome-logo" src="static/Lubina.svg" alt="Lubina" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="width:64px;height:64px;border-radius:18px;object-fit:contain;background:var(--primary-gradient);padding:10px;box-shadow:0 6px 24px var(--primary-glow);animation:floatLogo 3s ease-in-out infinite;">
       <div class="welcome-logo" style="display:none;">AI</div>
       <h2>Lubina</h2>
-      <p>你的桌面学习伙伴 — 写论文 · 整笔记 · 做PPT · 查错题</p>
-      <div class="welcome-hints">
-        <div class="hint-chip" onclick="document.getElementById('chatInput').value='帮我写一篇关于人工智能的课程论文大纲';document.getElementById('chatInput').focus()">写论文大纲</div>
-        <div class="hint-chip" onclick="document.getElementById('chatInput').value='解释一下什么是快速排序，并给出Python实现';document.getElementById('chatInput').focus()">解释算法</div>
-        <div class="hint-chip" onclick="document.getElementById('chatInput').value='测试';document.getElementById('chatInput').focus()">测试 Agent 演示</div>
-        <div class="hint-chip" onclick="document.getElementById('chatInput').value='帮我总结一下这篇文章的要点';document.getElementById('chatInput').focus()">总结文档</div>
-      </div></div>`;
+      <p>你的桌面学习伙伴</p>
+    </div>`;
   }
 
   function _updateInputState(disabled) {
@@ -232,35 +498,60 @@ const Chat = (() => {
   }
 
   // ===== 辅助 =====
-  function _sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
-  function _scrollToBottom() { requestAnimationFrame(()=>{const c=document.getElementById('messageContainer');if(c)c.scrollTop=c.scrollHeight;}); }
-  function _esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
-  function _escAttr(s) { return s.replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+  function _scrollToBottom() {
+    requestAnimationFrame(() => {
+      const c = document.getElementById('messageContainer');
+      if (c) c.scrollTop = c.scrollHeight;
+    });
+  }
+
+  function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function _escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+  function _showToast(msg, type) {
+    if (typeof App !== 'undefined' && App.showToast) App.showToast(msg, type || 'info');
+  }
 
   function _loadFromStorage() {
-    try { const d=localStorage.getItem('lubina_conversations'); if(d){conversations=JSON.parse(d);conversations.forEach(c=>c.messages.forEach(m=>m.streaming=false));if(conversations.length>0)activeConversationId=conversations[0].id;} } catch(_){conversations=[];}
+    try {
+      const d = localStorage.getItem('lubina_conversations');
+      if (d) {
+        conversations = JSON.parse(d);
+        conversations.forEach(c => c.messages.forEach(m => m.streaming = false));
+        if (conversations.length > 0) activeConversationId = conversations[0].id;
+      }
+    } catch (_) { conversations = []; }
   }
+
   function _saveToStorage() {
     try {
-      const cleaned = conversations.map(function(c) {
-        return { id: c.id, title: c.title, model: c.model, createdAt: c.createdAt,
-          messages: c.messages.map(function(m) {
+      const cleaned = conversations.map(function (c) {
+        return {
+          id: c.id, title: c.title, model: c.model, providerId: c.providerId, mode: c.mode, createdAt: c.createdAt,
+          messages: c.messages.map(function (m) {
             return { role: m.role, type: m.type, content: m.content, timestamp: m.timestamp, action: m.action, options: m.options, streaming: false };
           })
         };
       });
       localStorage.setItem('lubina_conversations', JSON.stringify(cleaned));
-    } catch(_) {}
+    } catch (_) { }
   }
+
+  // ===== 公开 API =====
 
   return {
     mount, destroy,
-    sendMessage, stopGenerating, confirmAction, selectOption,
+    sendMessage, stopGenerating,
+    setMode, setModel,
     switchTo: _switchConversation,
     deleteConversation,
     newConversation: () => {
-      const conv = _createConversation('新对话'); _renderConversationList(); _switchConversation(conv.id);
-      const inp = document.getElementById('chatInput'); if (inp) inp.focus();
+      const conv = _createConversation('新对话');
+      _renderConversationList();
+      _switchConversation(conv.id);
+      const inp = document.getElementById('chatInput');
+      if (inp) inp.focus();
     },
   };
 })();

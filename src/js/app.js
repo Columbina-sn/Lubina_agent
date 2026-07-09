@@ -204,6 +204,19 @@ const App = (() => {
         if (typeof Chat !== 'undefined') Chat.newConversation();
         return;
       }
+      // 模式切换按钮
+      if (t.classList.contains('chat-mode-btn') || t.closest('.chat-mode-btn')) {
+        const btn = t.classList.contains('chat-mode-btn') ? t : t.closest('.chat-mode-btn');
+        if (typeof Chat !== 'undefined') Chat.setMode(btn.dataset.mode);
+        return;
+      }
+    });
+
+    // select 变更事件
+    els.panelContainer.addEventListener('change', (e) => {
+      if (e.target.id === 'chatModelSelect') {
+        if (typeof Chat !== 'undefined') Chat.setModel(e.target.value);
+      }
     });
 
     // textarea 键盘事件
@@ -261,15 +274,26 @@ const App = (() => {
       case 'home': return `
         <div class="page-container page-row" id="homePage">
           <div class="chat-sidebar" id="chatSidebar">
-            <div class="chat-sidebar-header"><span class="chat-sidebar-title">对话</span><button class="chat-new-btn" id="homeNewBtn" title="新对话" onclick="Chat.newConversation()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
+            <div class="chat-sidebar-header"><span class="chat-sidebar-title">对话</span><button class="chat-new-btn" id="homeNewBtn" title="新对话"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
             <div class="conv-list" id="conversationList"></div>
           </div>
           <div class="split-handle" id="chatSplitHandle" style="cursor:col-resize;"></div>
           <div class="chat-main">
             <div class="message-container" id="messageContainer"></div>
-            <div class="chat-input-area"><div class="chat-input-wrapper"><textarea class="chat-input" id="chatInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)" rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();var v=this.value.trim();if(v){Chat.sendMessage(v);this.value='';this.style.height='auto';}}" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,140)+'px'"></textarea>
-            <button class="btn-send" id="sendBtn" onclick="var i=document.getElementById('chatInput');var v=i.value.trim();if(v){Chat.sendMessage(v);i.value='';i.style.height='auto';}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
-            <button class="btn-stop hidden" id="stopBtn" onclick="Chat.stopGenerating()">停止</button></div><p class="chat-input-hint">Lubina · 数据仅存储在你本地</p></div>
+            <div class="chat-input-area">
+              <div class="chat-input-wrapper"><textarea class="chat-input" id="chatInput" placeholder="输入消息… (Enter 发送，Shift+Enter 换行)" rows="1"></textarea>
+              <button class="btn-send" id="sendBtn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+              <button class="btn-stop hidden" id="stopBtn">停止</button></div>
+              <div class="chat-input-toolbar">
+                <div class="chat-mode-selector" id="chatModeSelector">
+                  <button class="chat-mode-btn active" data-mode="ask">Ask</button>
+                  <button class="chat-mode-btn" data-mode="plan">Plan</button>
+                  <button class="chat-mode-btn" data-mode="agent">Agent</button>
+                </div>
+                <select class="chat-model-select" id="chatModelSelect"></select>
+              </div>
+              <p class="chat-input-hint">Lubina · 内容由AI生成请注意甄别、审计</p>
+            </div>
           </div></div>`;
       case 'editor': return `
         <div class="page-container" id="editorPage">
@@ -280,18 +304,33 @@ const App = (() => {
       case 'exercises': return `<div class="page-container"><div class="placeholder-page"><h2>错题本</h2><p>拍照/截图/粘贴题目 → AI 解答 → 自动归类 → 定期复习</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
       case 'knowledge': return `<div class="page-container"><div class="placeholder-page"><h2>知识库</h2><p>导入课件、笔记、论文，AI 基于你的资料回答问题</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
       case 'settings': return `
-        <div class="page-container" id="settingsPage"><div class="settings-container">
-          <h1 class="settings-title">设置</h1><p class="settings-subtitle">配置你的 AI 模型和偏好</p>
-          <section class="settings-section"><h3>API Key</h3><p class="section-desc">填入你的 API Key，数据只存在本地</p>
-            <div class="form-group"><label>DeepSeek API Key</label><div class="input-row"><input type="password" class="input" id="settingDeepseekKey" placeholder="sk-..." autocomplete="off"><button class="btn btn-ghost btn-sm" onclick="Settings.toggleVisible('settingDeepseekKey')">显示</button></div></div>
-            <div class="form-group"><label>OpenAI API Key</label><div class="input-row"><input type="password" class="input" id="settingOpenaiKey" placeholder="sk-..." autocomplete="off"><button class="btn btn-ghost btn-sm" onclick="Settings.toggleVisible('settingOpenaiKey')">显示</button></div></div>
-            <div class="form-group"><label>Anthropic (Claude) API Key</label><div class="input-row"><input type="password" class="input" id="settingClaudeKey" placeholder="sk-ant-..." autocomplete="off"><button class="btn btn-ghost btn-sm" onclick="Settings.toggleVisible('settingClaudeKey')">显示</button></div></div>
-          </section>
-          <section class="settings-section"><h3>默认模型</h3><div class="form-group"><label>模型</label><select class="input" id="settingDefaultModel"><option value="deepseek-chat">DeepSeek V4 Flash（推荐 · 极速响应）</option><option value="deepseek-reasoner">DeepSeek V4 Pro（深度推理）</option><option value="gpt-4o">GPT-4o</option><option value="gpt-4o-mini">GPT-4o Mini</option><option value="claude-sonnet-5">Claude Sonnet 5</option><option value="claude-opus-4-8">Claude Opus 4.8</option></select></div></section>
-          <section class="settings-section"><h3>外观</h3><div class="form-group"><label>主题</label><select class="input" id="settingTheme" onchange="App.applyTheme(this.value)"><option value="light">浅色模式</option><option value="dark">深色模式 · 深空月夜</option><option value="auto">跟随系统</option></select></div></section>
-          <section class="settings-section"><h3>对话</h3><div class="form-group"><label>最大对话轮数</label><input type="number" class="input" id="settingMaxTurns" value="15" min="5" max="50" style="width:120px;"><span class="form-hint">超过后自动摘要压缩上下文</span></div></section>
-          <div class="form-actions"><button class="btn btn-primary btn-lg" onclick="Settings.save()">保存设置</button><button class="btn btn-ghost" onclick="App.showPage('home')">取消</button></div>
-        </div></div>`;
+        <div class="page-container" id="settingsPage">
+          <div class="settings-shell">
+            <div class="settings-nav" id="settingsNav">
+              <div class="settings-nav-item active" data-section="preferences" onclick="Settings.switchSection('preferences')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span>偏好选项</span>
+              </div>
+              <div class="settings-nav-item" data-section="providers" onclick="Settings.switchSection('providers')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                <span>供应商</span>
+              </div>
+              <div class="settings-nav-item" data-section="shortcuts" onclick="Settings.switchSection('shortcuts')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
+                <span>快捷键</span>
+              </div>
+              <div class="settings-nav-item" data-section="usage" onclick="Settings.switchSection('usage')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span>用量统计</span>
+              </div>
+              <div class="settings-nav-item" data-section="about" onclick="Settings.switchSection('about')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <span>关于</span>
+              </div>
+            </div>
+            <div class="settings-content" id="settingsContent"></div>
+          </div>
+        </div>`;
       default: return `<div class="page-container"><div class="placeholder-page"><h2>${id}</h2></div></div>`;
     }
   }

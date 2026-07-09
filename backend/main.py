@@ -4,8 +4,9 @@
     uvicorn backend.main:app --reload --port 19800
 
 全局异常处理 + 统一响应格式 + 健康检查端点。
-后续业务路由（chat、knowledge、config）将在对应模块中逐步添加。
+业务路由：providers / chat / config / vendors
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -15,15 +16,27 @@ import uvicorn
 
 from .config import HOST, PORT, DEBUG
 from .schemas.response import ApiResponse
+from .database import init_db
+from .routers import providers, chat, config_router, vendors
+from .utils import ok, fail
 
 # ═══════════════════════════════════════════
 # App 初始化
 # ═══════════════════════════════════════════
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时初始化数据库，关闭时清理资源"""
+    init_db()
+    yield
+
+
 app = FastAPI(
     title="Lubina Backend",
-    version="0.1.0",
+    version="0.2.0",
     description="Lubina 桌面 AI 助手后端服务 —— 运行在 127.0.0.1，不对外暴露",
+    lifespan=lifespan,
 )
 
 # CORS：允许前端跨域访问
@@ -92,6 +105,15 @@ async def global_exception_handler(request: Request, exc: Exception):
     detail = str(exc) if DEBUG else "服务器内部错误，请查看后端日志"
     return fail(message=f"服务器内部错误：{detail}", code=500)
 
+
+# ═══════════════════════════════════════════
+# 注册业务路由
+# ═══════════════════════════════════════════
+
+app.include_router(providers.router)
+app.include_router(chat.router)
+app.include_router(config_router.router)
+app.include_router(vendors.router)
 
 # ═══════════════════════════════════════════
 # 路由
