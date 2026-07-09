@@ -1,54 +1,127 @@
 /* ============================================================
-   api.js —— 封装对 Python FastAPI 后端的 fetch 调用
+   api.js v2 —— 统一 fetch 封装，对接后端 {code, message, data} 格式
+
    后端地址: http://127.0.0.1:19800
+   后端所有响应遵循: { "code": 200, "message": "ok", "data": {...} }
+     - code=200  → 成功，request() 自动解包返回 data
+     - code≠200  → 失败，request() 抛出 ApiError(code, message)
    ============================================================ */
 
 const API_BASE = 'http://127.0.0.1:19800';
 
+// ===== 错误类 =====
+
+/** API 错误 */
+class ApiError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;        // 后端返回的 code 字段（0=成功，非0=失败）
+    this.status = code;       // 兼容旧代码中 .status 的使用
+  }
+}
+
+// ===== 核心封装 =====
+
 /**
- * 基础请求封装
- * @param {string} endpoint - API 路径 (如 /v1/chat/completions)
- * @param {object} options - fetch 选项
- * @returns {Promise<Response>}
+ * 统一请求函数 —— 自动解析后端 {code, message, data} 格式
+ *
+ * 成功时（code=0）：返回 data 字段（解包后的实际数据）
+ * 失败时（code≠0）：抛出 ApiError(code, message)
+ * 网络断开时：抛出 ApiError(0, "无法连接到后端...")
+ *
+ * @param {string} endpoint - API 路径，如 '/health'
+ * @param {object} options - fetch 选项（method, body, headers 等）
+ * @returns {Promise<any>} 后端返回的 data 字段
  */
 async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
+
+  // 自动设置 Content-Type（FormData 除外）
+  const isFormData = options.body instanceof FormData;
   const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers: {},
     ...options,
   };
+  if (!isFormData && !config.headers['Content-Type']) {
+    config.headers['Content-Type'] = 'application/json';
+  }
 
+  // ===== 1. 发起请求 =====
+  let response;
   try {
-    const response = await fetch(url, config);
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new ApiError(response.status, error.detail || '请求失败');
-    }
-    return response;
+    response = await fetch(url, config);
   } catch (err) {
-    if (err instanceof ApiError) throw err;
     throw new ApiError(0, `无法连接到后端服务 (${API_BASE})，请确认后端已启动`);
   }
-}
 
-/** API 错误类 */
-class ApiError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
+  // ===== 2. 解析 JSON =====
+  let body;
+  try {
+    body = await response.json();
+  } catch (_) {
+    throw new ApiError(response.status, '服务器返回数据异常');
   }
+
+  // ===== 3. 检查统一响应格式 {code, message, data} =====
+  if (body && typeof body.code === 'number') {
+    if (body.code !== 200) {
+      throw new ApiError(body.code, body.message || '请求失败');
+    }
+    // 成功 → 解包，只返回 data 部分
+    return body.data !== undefined ? body.data : body;
+  }
+
+  // ===== 4. 兼容非标准响应（如第三方 API 直接透传）=====
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      body.detail || body.message || `请求失败 (${response.status})`
+    );
+  }
+  return body;
 }
 
-// ===== 聊天 API =====
+// ===== 便捷方法 =====
+
+const api = {
+  /** GET 请求 */
+  get(endpoint) {
+    return request(endpoint);
+  },
+
+  /** POST 请求 */
+  post(endpoint, data) {
+    return request(endpoint, {
+      method: 'POST',
+      body: data instanceof FormData ? data : JSON.stringify(data),
+    });
+  },
+
+  /** PUT 请求 */
+  put(endpoint, data) {
+    return request(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** DELETE 请求 */
+  del(endpoint) {
+    return request(endpoint, { method: 'DELETE' });
+  },
+};
+
+// ===== 聊天 API（流式 SSE）=====
 
 /**
  * 发送聊天消息（流式 SSE）
+ *
+ * 注意：SSE 是流式协议，不使用 {code, message, data} 包装。
+ * 后端直接返回 OpenAI 兼容的 SSE 流：data: {...}\n\ndata: [DONE]\n\n
+ *
  * @param {Array} messages - 消息历史
- * @param {object} options - { model, stream, onDelta, onDone, onError }
+ * @param {object} options - { model, onDelta, onDone, onError }
  * @returns {AbortController} 用于取消请求
  */
 function chatStream(messages, options = {}) {
@@ -64,17 +137,15 @@ function chatStream(messages, options = {}) {
   fetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-    }),
+    body: JSON.stringify({ model, messages, stream: true }),
     signal: controller.signal,
   })
     .then(async (response) => {
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        throw new ApiError(response.status, err.detail || '请求失败');
+        // 后端异常响应也是 {code, message, data} 格式
+        const message = err.message || err.detail || `请求失败 (${response.status})`;
+        throw new ApiError(response.status, message);
       }
 
       const reader = response.body.getReader();
@@ -87,7 +158,7 @@ function chatStream(messages, options = {}) {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop() || '';   // 剩余不完整的放回 buffer
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -116,56 +187,52 @@ function chatStream(messages, options = {}) {
 }
 
 // ===== 健康检查 =====
+
 async function healthCheck() {
-  const res = await request('/health');
-  return res.json();
+  return request('/health');
 }
 
 // ===== 知识库 API =====
+
 const knowledgeAPI = {
+  /** 上传文件到知识库 */
   upload: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch(`${API_BASE}/knowledge/upload`, {
-      method: 'POST',
-      body: formData,
-    });
-    return res.json();
+    return api.post('/knowledge/upload', formData);
   },
+
+  /** 基于知识库提问 */
   ask: async (question, topK = 5) => {
-    const res = await request('/knowledge/ask', {
-      method: 'POST',
-      body: JSON.stringify({ question, top_k: topK }),
-    });
-    return res.json();
+    return api.post('/knowledge/ask', { question, top_k: topK });
   },
+
+  /** 列出已导入的文件 */
   listFiles: async () => {
-    const res = await request('/knowledge/files');
-    return res.json();
+    return api.get('/knowledge/files');
   },
+
+  /** 删除知识库中的文件 */
   deleteFile: async (fileName) => {
-    const res = await request(`/knowledge/files/${encodeURIComponent(fileName)}`, {
-      method: 'DELETE',
-    });
-    return res.json();
+    return api.del(`/knowledge/files/${encodeURIComponent(fileName)}`);
   },
 };
 
 // ===== 配置 API =====
+
 const configAPI = {
+  /** 读取单个配置 */
   get: async (key) => {
-    const res = await request(`/config/${key}`);
-    return res.json();
+    return api.get(`/config/${key}`);
   },
+
+  /** 写入配置 */
   set: async (key, value) => {
-    const res = await request(`/config/${key}`, {
-      method: 'PUT',
-      body: JSON.stringify({ value }),
-    });
-    return res.json();
+    return api.put(`/config/${key}`, { value });
   },
+
+  /** 读取所有配置 */
   getAll: async () => {
-    const res = await request('/config');
-    return res.json();
+    return api.get('/config');
   },
 };
