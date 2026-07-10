@@ -52,9 +52,9 @@ body {
   text-decoration: none;
   opacity: 0.55;
   transition: opacity var(--transition-fast);
-  cursor: default;
+  cursor: pointer;
 }
-.navbar-logo:hover { opacity: 0.75; }
+.navbar-logo:hover { opacity: 0.85; }
 
 .navbar-logo-img {
   width: 26px;

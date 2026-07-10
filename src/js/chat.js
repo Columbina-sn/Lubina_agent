@@ -1,7 +1,7 @@
 /* ============================================================
    chat.js v5 — 真实 AI 流式聊天
 
-   模式切换：ask / plan / agent（当前均透传用户消息到 AI）
+   模式切换：ask / plan / auto（当前均透传用户消息到 AI）
    模型切换：从已启用的供应商中选择模型
    发送后锁定模式+模型，需新建对话才能更改
    流式回复统一用 info 气泡包裹渲染
@@ -198,7 +198,7 @@ const Chat = (() => {
 
     // 如果没有设置模型，提示用户
     if (!chatModelProviderId || !chatModelName) {
-      _showToast('请先在输入框左下角选择模型', 'warning');
+      _showToast('请先在输入框右下角选择模型', 'warning');
       return;
     }
 
@@ -218,7 +218,7 @@ const Chat = (() => {
     _updateInputState(true);
 
     // 创建流式 AI 消息占位（info 类型气泡）
-    const aiMsg = { role: 'assistant', type: 'info', content: '', timestamp: Date.now(), streaming: true };
+    const aiMsg = { role: 'assistant', type: 'info', content: '', timestamp: Date.now(), streaming: true, thinking: true, startTime: Date.now() };
     conv.messages.push(aiMsg);
 
     // 构建消息历史（只发 role + content）
@@ -241,6 +241,13 @@ const Chat = (() => {
         model: chatModelName,
         mode: chatMode,
         onDelta: (delta) => {
+          // 首个 token 到达：结束思考计时，记录耗时
+          if (aiMsg.thinking) {
+            aiMsg.thinking = false;
+            aiMsg.thinkingTime = ((Date.now() - aiMsg.startTime) / 1000).toFixed(1);
+            // 全量重建以移除"思考中……"占位，显示思考耗时
+            _renderMessages(conv.messages);
+          }
           aiMsg.content += delta;
           pendingContent += delta;
 
@@ -256,7 +263,10 @@ const Chat = (() => {
         onDone: () => {
           // 清除待处理的节流，立即渲染最终状态
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+          aiMsg.thinking = false;
           aiMsg.streaming = false;
+          // 无内容兜底
+          if (!aiMsg.content) aiMsg.content = '（AI 未返回内容）';
           _updateLastBubble(aiMsg);
           _scrollToBottom();
           isGenerating = false;
@@ -267,6 +277,7 @@ const Chat = (() => {
         },
         onError: (err) => {
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+          aiMsg.thinking = false;
           aiMsg.type = 'error';
           aiMsg.content = aiMsg.content || `错误：${err.message || '请求失败'}`;
           if (!aiMsg.content.startsWith('错误')) aiMsg.content = `错误：${aiMsg.content}`;
@@ -280,6 +291,7 @@ const Chat = (() => {
         },
       });
     } catch (err) {
+      aiMsg.thinking = false;
       aiMsg.type = 'error';
       aiMsg.content = `错误：${err.message || '请求失败'}`;
       aiMsg.streaming = false;
@@ -302,6 +314,7 @@ const Chat = (() => {
       const last = conv.messages[conv.messages.length - 1];
       if (last?.streaming) {
         last.streaming = false;
+        last.thinking = false;
         if (!last.content) last.content = '（已停止）';
       }
     }
@@ -410,7 +423,7 @@ const Chat = (() => {
     const type = msg.type || 'info';
     const typeLabels = {
       info: { label: '', cls: 'ai-info' },
-      action: { label: msg.action || '正在执行操作…', cls: 'ai-action' },
+      action: { label: '操作中……', cls: 'ai-action' },
       warning: { label: '需要你的确认', cls: 'ai-warning' },
       success: { label: '操作完成', cls: 'ai-success' },
       error: { label: '请求失败', cls: 'ai-error' },
@@ -418,7 +431,22 @@ const Chat = (() => {
     };
     const tl = typeLabels[type] || typeLabels.info;
     let extra = '';
-    if (tl.label) extra += `<div class="action-label">${tl.label}</div>`;
+
+    // 思考中……占位（无内容时呼吸动画）
+    if (msg.thinking && !msg.content) {
+      extra += `<div class="thinking-state">思考中……</div>`;
+    }
+
+    // 思考耗时（思考结束且有内容时显示）
+    if (msg.thinkingTime && !msg.thinking && msg.content) {
+      extra += `<div class="thinking-time">已思考 ${msg.thinkingTime} 秒</div>`;
+    }
+
+    // action label（streaming 时带呼吸动画）
+    if (tl.label) {
+      const animCls = (type === 'action' && msg.streaming) ? ' thinking-state' : '';
+      extra += `<div class="action-label${animCls}">${tl.label}</div>`;
+    }
 
     // Markdown 内容
     let mdContent = msg.content || '';
@@ -426,8 +454,8 @@ const Chat = (() => {
       try { mdContent = marked.parse(msg.content || '') || ''; } catch (_) { mdContent = _esc(msg.content || ''); }
     }
 
-    // 流式光标
-    if (msg.streaming) {
+    // 流式光标（思考中不显示光标，只有"思考中……"文字）
+    if (msg.streaming && !msg.thinking) {
       mdContent += '<span class="typing-cursor"></span>';
     }
 
@@ -450,6 +478,19 @@ const Chat = (() => {
     const lastRow = rows[rows.length - 1];
     if (!lastRow) return;
 
+    // 如果思考状态已结束但气泡中仍有思考占位，移除它
+    if (!msg.thinking) {
+      const thinkingEl = lastRow.querySelector('.thinking-state');
+      if (thinkingEl) thinkingEl.remove();
+      // 如果有思考耗时但尚未显示，通过全量重建来展示
+      if (msg.thinkingTime && !lastRow.querySelector('.thinking-time')) {
+        // 无法局部插入，标记需要重建
+        const conv = _getActiveConversation();
+        if (conv) _renderMessages(conv.messages);
+        return;
+      }
+    }
+
     const mdBody = lastRow.querySelector('.markdown-body');
     if (!mdBody) return;
 
@@ -459,8 +500,8 @@ const Chat = (() => {
       try { mdContent = marked.parse(msg.content || '') || ''; } catch (_) { mdContent = _esc(msg.content || ''); }
     }
 
-    // 流式光标
-    if (msg.streaming) {
+    // 流式光标（思考中不显示）
+    if (msg.streaming && !msg.thinking) {
       mdContent += '<span class="typing-cursor"></span>';
     }
 

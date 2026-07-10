@@ -15,7 +15,7 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage] = Field(..., min_length=1)
     provider_id: str = Field(..., description="供应商 ID")
     model: str = Field(..., description="模型名称，如 deepseek-v4-flash")
-    mode: str = Field(default="ask", description="ask / plan / agent")
+    mode: str = Field(default="ask", description="ask / plan / auto")
     stream: bool = Field(default=True)
     max_tokens: Optional[int] = Field(default=None)
     temperature: Optional[float] = Field(default=None)

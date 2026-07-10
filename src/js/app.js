@@ -7,6 +7,7 @@ const App = (() => {
   const state = {
     activePage: 'home', splitMode: null,
     fileExplorerOpen: true, theme: 'auto', unreadCount: 0,
+    rendered: false,  // 首次渲染标志
   };
   let els = {};
 
@@ -19,6 +20,7 @@ const App = (() => {
     els.contextMenu = document.getElementById('contextMenu');
 
     restoreTheme();
+    restoreFontSize();
     bindActivityBar();
     bindShellHandles();
     bindGlobalEvents();
@@ -43,27 +45,52 @@ const App = (() => {
     localStorage.setItem('lubina_theme', v);
   }
 
-  // ===== 页面 =====
-  function showPage(id) {
-    if (id === 'home') { state.unreadCount = 0; updateBadge(); }
-    state.activePage = id;
-    els.activityBar.querySelectorAll('.activity-btn').forEach(b => b.classList.toggle('active', b.dataset.page === id));
-    if (state.splitMode) closeSplit();
-    renderSingle(id);
+  // ===== 字体大小 =====
+  function restoreFontSize() {
+    const s = localStorage.getItem('lubina_font_size') || '1.0';
+    applyFontSize(parseFloat(s));
+  }
+  function applyFontSize(scale) {
+    // 基准 13.5px，所有 rem 尺寸等比缩放
+    document.documentElement.style.fontSize = (13.5 * scale) + 'px';
   }
 
-  function renderSingle(id) {
-    unmountPage(state.activePage);
+  // ===== 页面 =====
+  async function showPage(id) {
+    // 已经在目标页面（首次渲染除外），不做任何操作
+    if (state.rendered && id === state.activePage && !state.splitMode) return;
+    if (id === 'home') { state.unreadCount = 0; }
+    if (state.splitMode) await closeSplit();
+    const ok = await renderSingle(id);
+    if (!ok) return;  // 用户取消了未保存弹窗
+    state.activePage = id;
+    els.activityBar.querySelectorAll('.activity-btn').forEach(b => b.classList.toggle('active', b.dataset.page === id));
+    updateBadge();
+  }
+
+  async function renderSingle(id) {
+    const oldPage = state.activePage;
+    // 只有页面真正切换时才卸载旧页面（关闭分屏时 oldPage === id，不需要卸载）
+    if (oldPage !== id) {
+      const result = unmountPage(oldPage);
+      if (result instanceof Promise) {
+        try { await result; } catch (_) { return false; }  // 用户取消
+      }
+    }
     state.splitMode = null;
+    state.rendered = true;
     els.panelContainer.className = 'split-root single';
     els.panelContainer.innerHTML = `<div class="split-panel" data-page="${id}">${pageHTML(id)}</div>`;
     requestAnimationFrame(() => mountPage(id));
+    return true;
   }
 
   function unmountPage(id) {
     if (id === 'home' && typeof Chat !== 'undefined') Chat.destroy();
     if (id === 'editor' && typeof Editor !== 'undefined') Editor.destroy();
-    if (id === 'settings' && typeof Settings !== 'undefined') Settings.destroy();
+    if (id === 'settings' && typeof Settings !== 'undefined') {
+      return Settings.destroy();  // 可能返回 Promise（未保存弹窗）
+    }
   }
 
   function mountPage(id) {
@@ -76,9 +103,12 @@ const App = (() => {
   }
 
   // ===== 分屏 =====
-  function splitPage(pageId, dir) {
-    if (state.splitMode) closeSplit();
-    unmountPage(state.activePage);
+  async function splitPage(pageId, dir) {
+    if (state.splitMode) await closeSplit();
+    const result = unmountPage(state.activePage);
+    if (result instanceof Promise) {
+      try { await result; } catch (_) { return; }  // 用户取消
+    }
     state.splitMode = { direction: dir, pages: [state.activePage, pageId] };
     els.panelContainer.className = `split-root ${dir}`;
     els.panelContainer.innerHTML = '';
@@ -90,7 +120,7 @@ const App = (() => {
     requestAnimationFrame(() => { mountPage(state.activePage); });
   }
 
-  function closeSplit() { state.splitMode = null; renderSingle(state.activePage); }
+  async function closeSplit() { state.splitMode = null; await renderSingle(state.activePage); }
 
   // ===== 拖拽 =====
   function bindShellHandles() {
@@ -288,7 +318,7 @@ const App = (() => {
                 <div class="chat-mode-selector" id="chatModeSelector">
                   <button class="chat-mode-btn active" data-mode="ask">Ask</button>
                   <button class="chat-mode-btn" data-mode="plan">Plan</button>
-                  <button class="chat-mode-btn" data-mode="agent">Agent</button>
+                  <button class="chat-mode-btn" data-mode="agent">Auto</button>
                 </div>
                 <select class="chat-model-select" id="chatModelSelect"></select>
               </div>
@@ -451,7 +481,7 @@ const App = (() => {
   }
 
   return {
-    init, showPage, splitPage, closeSplit, toggleFileExplorer, applyTheme,
+    init, showPage, splitPage, closeSplit, toggleFileExplorer, applyTheme, applyFontSize,
     addUnread, updateBadge, getState: () => state,
     toggleAvatarDropdown, showLoginModal, closeLoginModal, switchLoginMode, handleLogin, logout,
     showToast, updateAvatarUI

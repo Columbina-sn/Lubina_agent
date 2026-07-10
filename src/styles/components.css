@@ -619,3 +619,65 @@ select.input {
 .loading-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); animation: pulse 1.2s infinite; }
 .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
 .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+/* 思考状态文字：极慢的呼吸动画，让用户感知"这条消息是活的" */
+.thinking-state {
+  animation: thinkingBreathe 2.5s ease-in-out infinite;
+  color: var(--text-sub);
+  font-size: 0.85rem;
+  padding: 10px 14px;
+  text-align: center;
+  user-select: none;
+}
+@keyframes thinkingBreathe {
+  0%, 100% { opacity: 0.6; transform: scale(0.99); }
+  50%      { opacity: 1; transform: scale(1.01); }
+}
+
+/* 思考耗时小字 */
+.thinking-time {
+  font-size: 0.7rem;
+  color: var(--text-tip);
+  margin-bottom: 6px;
+  user-select: none;
+}
+
+/* 字体大小滑块 */
+.font-size-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.font-size-slider input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--primary-gradient);
+  outline: none;
+  cursor: pointer;
+}
+.font-size-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--primary);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.font-size-slider input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.font-size-slider .font-size-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-body);
+  min-width: 42px;
+  text-align: center;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+}

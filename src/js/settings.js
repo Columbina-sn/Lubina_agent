@@ -24,7 +24,71 @@ const Settings = (() => {
   }
 
   function destroy() {
-    // 无需特殊清理
+    // 离开设置页时检查供应商是否有未保存修改
+    if (_isProviderDirty()) {
+      // 快照表单值（离开设置页后 DOM 会被销毁，不能再读 input）
+      const snapshot = {
+        id: selectedProviderId,
+        apiKey: document.getElementById('providerApiKey')?.value || '',
+        baseUrl: document.getElementById('providerBaseUrl')?.value?.trim() || '',
+        apiPath: document.getElementById('providerApiPath')?.value?.trim() || '',
+      };
+      return new Promise((resolve, reject) => {
+        _showUnsavedModal(
+          () => { _saveSnapshot(snapshot); resolve(); },
+          () => { resolve(); },
+          () => { reject(new Error('cancelled')); }
+        );
+      });
+    }
+  }
+
+  async function _saveSnapshot(snapshot) {
+    if (!snapshot.baseUrl) return;
+    try {
+      await api.put(`/api/providers/${snapshot.id}`, {
+        api_key: snapshot.apiKey, base_url: snapshot.baseUrl, api_path: snapshot.apiPath
+      });
+    } catch (_) { /* 静默失败，页面已离开 */ }
+  }
+
+  // ── 未保存弹窗 ──
+
+  function _showUnsavedModal(onSave, onDiscard, onCancel) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-dialog" style="max-width:400px;">
+        <h3>未保存的修改</h3>
+        <p>供应商信息已修改但未保存。要保存修改吗？</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="unsavedDiscard">不保存</button>
+          <button class="btn btn-ghost" id="unsavedCancel">取消</button>
+          <button class="btn btn-primary" id="unsavedSave">保存</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const cleanup = () => overlay.remove();
+
+    overlay.querySelector('#unsavedSave').onclick = () => {
+      cleanup();
+      if (onSave) onSave();
+    };
+    overlay.querySelector('#unsavedDiscard').onclick = () => {
+      cleanup();
+      if (onDiscard) onDiscard();
+    };
+    overlay.querySelector('#unsavedCancel').onclick = () => {
+      cleanup();
+      if (onCancel) onCancel();
+    };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) { cleanup(); if (onCancel) onCancel(); }
+    });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', esc); if (onCancel) onCancel(); }
+    });
   }
 
   // ===== 数据获取 =====
@@ -57,6 +121,20 @@ const Settings = (() => {
   // ===== 导航切换 =====
 
   function switchSection(section) {
+    // 已经在当前 section，不做任何操作
+    if (section === currentSection) return;
+    // 从供应商 section 切走时，检查是否有未保存的修改
+    if (currentSection === 'providers' && _isProviderDirty()) {
+      _showUnsavedModal(
+        () => { saveProviderDetail(selectedProviderId); _doSwitchSection(section); },
+        () => { _doSwitchSection(section); }
+      );
+      return;
+    }
+    _doSwitchSection(section);
+  }
+
+  function _doSwitchSection(section) {
     currentSection = section;
     selectedProviderId = null;
     _highlightNav(section);
@@ -89,16 +167,17 @@ const Settings = (() => {
   function _renderPreferences(container) {
     const theme = localStorage.getItem('lubina_theme') || 'auto';
     const maxTurns = localStorage.getItem('lubina_max_turns') || '15';
+    const fontSize = localStorage.getItem('lubina_font_size') || '1.0';
 
     container.innerHTML = `
       <div class="settings-section-header">
         <h3>偏好选项</h3>
-        <p class="section-desc">调整应用外观和对话行为</p>
+        <p class="section-desc">调整应用外观和对话行为（修改即时生效）</p>
       </div>
       <div class="settings-card">
         <div class="form-group">
           <label>主题</label>
-          <select class="input" id="settingTheme" onchange="App.applyTheme(this.value)">
+          <select class="input" id="settingTheme" onchange="Settings.onThemeChange(this.value)">
             <option value="light" ${theme === 'light' ? 'selected' : ''}>浅色模式</option>
             <option value="dark" ${theme === 'dark' ? 'selected' : ''}>深色模式 · 深空月夜</option>
             <option value="auto" ${theme === 'auto' ? 'selected' : ''}>跟随系统</option>
@@ -107,25 +186,59 @@ const Settings = (() => {
       </div>
       <div class="settings-card" style="margin-top:14px;">
         <div class="form-group">
+          <label>字体大小</label>
+          <p class="section-desc" style="margin:0 0 8px 0;">全局缩放所有文字和界面元素</p>
+          <div class="font-size-slider">
+            <span style="font-size:0.75rem;color:var(--text-tip);">0.8x</span>
+            <input type="range" id="settingFontSize" min="0.8" max="1.5" step="0.05" value="${fontSize}"
+                   oninput="Settings.onFontSizeInput(this.value)">
+            <span style="font-size:0.75rem;color:var(--text-tip);">1.5x</span>
+            <span class="font-size-value" id="fontSizeValue">${fontSize}x</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group">
           <label>最大对话轮数</label>
           <div style="display:flex;align-items:center;gap:10px;">
-            <input type="number" class="input" id="settingMaxTurns" value="${maxTurns}" min="5" max="50" style="width:120px;">
+            <input type="number" class="input" id="settingMaxTurns" value="${maxTurns}" min="5" max="50" style="width:120px;"
+                   onchange="Settings.onMaxTurnsChange(this.value)">
             <span class="form-hint">超过后自动摘要压缩上下文</span>
           </div>
         </div>
       </div>
       <div class="form-actions" style="margin-top:20px;">
-        <button class="btn btn-primary" onclick="Settings.savePreferences()">保存</button>
+        <button class="btn btn-ghost" onclick="Settings.restoreDefaults()">恢复默认</button>
       </div>`;
   }
 
-  function savePreferences() {
-    const theme = document.getElementById('settingTheme')?.value || 'auto';
-    const maxTurns = document.getElementById('settingMaxTurns')?.value || '15';
-    localStorage.setItem('lubina_theme', theme);
-    localStorage.setItem('lubina_max_turns', maxTurns);
-    if (typeof App !== 'undefined') App.applyTheme(theme);
-    _showSaveToast();
+  // ── 偏好选项即时生效 ──
+
+  function onThemeChange(value) {
+    localStorage.setItem('lubina_theme', value);
+    if (typeof App !== 'undefined') App.applyTheme(value);
+  }
+
+  function onFontSizeInput(value) {
+    document.getElementById('fontSizeValue').textContent = value + 'x';
+    if (typeof App !== 'undefined') App.applyFontSize(parseFloat(value));
+    localStorage.setItem('lubina_font_size', value);
+  }
+
+  function onMaxTurnsChange(value) {
+    localStorage.setItem('lubina_max_turns', value);
+  }
+
+  function restoreDefaults() {
+    localStorage.setItem('lubina_theme', 'auto');
+    localStorage.setItem('lubina_font_size', '1.0');
+    localStorage.setItem('lubina_max_turns', '15');
+    if (typeof App !== 'undefined') {
+      App.applyTheme('auto');
+      App.applyFontSize(1.0);
+    }
+    _renderSection('preferences');
+    _showToast('已恢复默认设置', 'info');
   }
 
   // ── 供应商（左右分栏）──
@@ -172,9 +285,25 @@ const Settings = (() => {
   }
 
   function selectProvider(id) {
+    // 切换到不同供应商时，检查是否有未保存的修改
+    if (_isProviderDirty() && id !== selectedProviderId) {
+      _showUnsavedModal(
+        () => { saveProviderDetail(selectedProviderId); _doSelectProvider(id); },
+        () => { _doSelectProvider(id); }
+      );
+      return;
+    }
+    _doSelectProvider(id);
+  }
+
+  function _doSelectProvider(id) {
     selectedProviderId = id;
     _renderProviderList();
-    _renderProviderDetail(id);
+    if (id) _renderProviderDetail(id);
+    else {
+      const panel = document.getElementById('providerDetailPanel');
+      if (panel) panel.innerHTML = '<div class="provider-empty-hint">选择左侧供应商查看详情<br>或点击下方按钮添加新供应商</div>';
+    }
   }
 
   function _renderProviderDetail(id) {
@@ -395,6 +524,28 @@ const Settings = (() => {
     }
   }
 
+  // ── 供应商脏检查 ──
+
+  function _isProviderDirty() {
+    if (!selectedProviderId) return false;
+    const p = providers.find(x => x.id === selectedProviderId);
+    if (!p) return false;
+
+    const apiKeyEl = document.getElementById('providerApiKey');
+    const baseUrlEl = document.getElementById('providerBaseUrl');
+    const apiPathEl = document.getElementById('providerApiPath');
+    // 如果表单字段不存在（未渲染详情），则无脏数据
+    if (!apiKeyEl || !baseUrlEl || !apiPathEl) return false;
+
+    const apiKey = apiKeyEl.value;
+    const baseUrl = baseUrlEl.value.trim();
+    const apiPath = apiPathEl.value.trim();
+
+    return apiKey !== (p.api_key || '') ||
+           baseUrl !== (p.base_url || '') ||
+           apiPath !== (p.api_path || '/v1/chat/completions');
+  }
+
   // ── 模型操作 ──
 
   function showAddModel(providerId) {
@@ -529,7 +680,7 @@ const Settings = (() => {
     showAddProvider, onVendorChange, addProvider,
     saveProviderDetail, toggleProvider, confirmDeleteProvider,
     showAddModel, addModel, toggleModel, deleteModel,
-    savePreferences,
+    onThemeChange, onFontSizeInput, onMaxTurnsChange, restoreDefaults,
     toggleVisible,
   };
 })();

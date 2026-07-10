@@ -18,7 +18,7 @@ async def chat_completions(req: ChatRequest):
     """聊天接口 — 转发到指定供应商，流式返回 SSE
 
     对于 ask 模式：直接把用户消息转发给 AI，不添加额外提示词。
-    plan/agent 模式暂时与 ask 相同（预留扩展）。
+    plan/auto 模式暂时与 ask 相同（预留扩展）。
     """
     # 1. 从数据库获取供应商信息
     conn = get_db()
