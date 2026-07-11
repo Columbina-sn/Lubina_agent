@@ -618,7 +618,7 @@ const Settings = (() => {
       <div class="settings-section-header"><h3>快捷键</h3></div>
       <div class="settings-card">
         <div class="shortcut-list">
-          <div class="shortcut-row"><span>切换文件树</span><kbd>Ctrl + B</kbd></div>
+          <div class="shortcut-row"><span>打开/隐藏文件树</span><kbd>Ctrl + B</kbd></div>
           <div class="shortcut-row"><span>聚焦输入框</span><kbd>Ctrl + K</kbd></div>
           <div class="shortcut-row"><span>新建对话</span><kbd>Ctrl + N</kbd></div>
         </div>

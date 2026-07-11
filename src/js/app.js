@@ -110,8 +110,8 @@ const App = (() => {
 
   function _editorUnmountCheck() {
     if (typeof Editor === 'undefined') return;
-    const files = Editor.getOpenFiles ? Editor.getOpenFiles() : [];
-    const dirty = files.some(f => f.modified);
+    let allFiles = [];
+    if (Editor.getAllOpenFiles) allFiles = Editor.getAllOpenFiles(); else if (Editor.getOpenFiles) allFiles = Editor.getOpenFiles(); const dirty = allFiles.some(f => f.modified);
     if (!dirty) { Editor.destroy(); return; }
     return new Promise((resolve, reject) => {
       const ov = document.createElement('div'); ov.className = 'modal-overlay';
@@ -127,7 +127,7 @@ const App = (() => {
       ov.querySelector('#_euCancel').onclick = () => { ov.remove(); reject(new Error('cancelled')); };
       ov.querySelector('#_euSave').onclick = async () => {
         ov.remove();
-        if (Editor.saveFile) await Editor.saveFile();
+        if (Editor.saveAllFiles) await Editor.saveAllFiles(); else if (Editor.saveFile) await Editor.saveFile();
         Editor.destroy(); resolve();
       };
       ov.addEventListener('click', e => { if (e.target === ov) { ov.remove(); reject(new Error('cancelled')); } });
@@ -289,7 +289,7 @@ const App = (() => {
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey||e.metaKey) && e.key === 'b') { e.preventDefault(); toggleFileExplorer(); }
       if ((e.ctrlKey||e.metaKey) && e.key === 'k') { e.preventDefault(); const inp = document.getElementById('chatInput'); if (inp) inp.focus(); }
-      if ((e.ctrlKey||e.metaKey) && e.key === 'n') { e.preventDefault(); if (typeof Chat!=='undefined'&&Chat.newConversation) Chat.newConversation(); }
+      if ((e.ctrlKey||e.metaKey) && e.key === 'n') { e.preventDefault(); if (state.activePage === 'home' && typeof Chat!=='undefined'&&Chat.newConversation) Chat.newConversation(); }
     });
     window.addEventListener('resize', () => { if (typeof Editor!=='undefined'&&Editor.refresh) Editor.refresh(); });
   }
@@ -327,13 +327,21 @@ const App = (() => {
               <p class="chat-input-hint">Lubina · 内容由AI生成请注意甄别、审计</p>
             </div>
           </div></div>`;
-      case 'editor': return `
+      case 'editor': {
+        const panelHTML = (pi) => `
+        <div class="split-panel${pi === 1 ? ' hidden' : ''}" id="editorPanel${pi}">
+          <div class="editor-tabs" id="editorTabs${pi}"></div>
+          <div class="editor-container" id="editorContainer${pi}">
+            <div class="editor-cm-wrapper hidden" id="editorCmWrapper${pi}"></div>
+            <div class="editor-binary-notice hidden" id="editorBinaryNotice${pi}"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg><h3>不支持打开此类二进制文件</h3><p id="editorBinaryExt${pi}"></p></div>
+            <div class="editor-empty-state" id="editorEmptyState${pi}"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg><h3>编辑器</h3><p>从左侧文件树打开一个文件<br>或拖拽文件到此处</p></div></div></div>`;
+        return `
         <div class="page-container" id="editorPage">
-          <div class="editor-tabs" id="editorTabs"></div>
-          <div class="editor-container" id="editorContainer">
-            <div class="editor-cm-wrapper" id="editorCmWrapper"></div>
-            <div class="editor-binary-notice hidden" id="editorBinaryNotice"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg><h3>不支持打开此类二进制文件</h3><p id="editorBinaryExt"></p></div>
-            <div class="editor-empty-state" id="editorEmptyState"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg><h3>编辑器</h3><p>从左侧文件树打开一个文件<br>或拖拽文件到此处</p></div></div></div>`;
+          <div class="split-root horizontal" id="editorSplitRoot">
+            ${panelHTML(0)}
+            <div class="split-handle hidden" id="editorSplitHandle"></div>
+            ${panelHTML(1)}
+          </div></div>`; }
       case 'exercises': return `<div class="page-container"><div class="placeholder-page"><h2>错题本</h2><p>拍照/截图/粘贴题目 → AI 解答 → 自动归类 → 定期复习</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
       case 'knowledge': return `<div class="page-container"><div class="placeholder-page"><h2>知识库</h2><p>导入课件、笔记、论文，AI 基于你的资料回答问题</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
       case 'settings': return `

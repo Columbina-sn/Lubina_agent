@@ -20,7 +20,7 @@
    1. 文件树节点
    ═══════════════════════════════════════════ */
 .tree-node {
-  display: flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; gap: 0.3em;
   padding: 2px 10px; padding-left: calc(8px + var(--depth, 0) * 16px);
   font-size: 0.84rem; color: var(--text-body); cursor: pointer;
   transition: all var(--transition-fast); white-space: nowrap;
@@ -28,7 +28,8 @@
 }
 .tree-node:hover { background: var(--primary-light); }
 .tree-node.active { background: var(--primary-light); color: var(--primary); border-left-color: var(--primary); }
-.tree-node-icon { flex-shrink: 0; width: 16px; text-align: center; font-size: 0.9rem; }
+.tree-node-icon { flex-shrink: 0; min-width: 1.2em; text-align: center; font-size: 0.9rem; line-height: 1; }
+.tree-node-icon svg { width: 1em; height: 1em; vertical-align: middle; }
 .tree-node-icon.folder  { color: #D4902A; }
 .tree-node-icon.file-js { color: #E8B83A; }
 .tree-node-icon.file-py { color: #4B8BBE; }
@@ -38,7 +39,7 @@
 .tree-node-icon.file-md { color: #8a7fc2; }
 .tree-node-icon.file-img { color: #e0c4d0; }
 .tree-node-icon.file-default { color: var(--text-tip); }
-.tree-node-arrow { flex-shrink: 0; width: 14px; font-size: 0.65rem; color: var(--text-tip); transition: transform 0.2s; text-align: center; }
+.tree-node-arrow { flex-shrink: 0; min-width: 0.9em; font-size: 0.65rem; color: var(--text-tip); transition: transform 0.2s; text-align: center; }
 .tree-node-arrow.expanded { transform: rotate(90deg); }
 .tree-node-name { overflow: hidden; text-overflow: ellipsis; }
 .tree-children { overflow: hidden; transition: max-height 0.25s var(--ease-out); }
@@ -406,12 +407,32 @@
 .editor-cm-wrapper .cm-scroller { overflow: auto; }
 
 /* ── 预览工具栏 ── */
+	/* ── tab 栏右侧操作区（预览切换 + 分屏按钮）── */
+	.editor-tabs-actions {
+	  display: flex; align-items: center; gap: 4px;
+	  margin-left: auto; padding-right: 4px; flex-shrink: 0;
+	}
+	.editor-action-btn {
+	  padding: 3px 8px; font-size: 0.72rem; font-weight: 500;
+	  font-family: inherit; color: var(--text-sub);
+	  background: transparent; border: 1px solid var(--border-light);
+	  border-radius: var(--radius-sm); cursor: pointer;
+	  white-space: nowrap; transition: all var(--transition-fast);
+	}
+	.editor-action-btn:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+	/* 非活跃面板的 tab 稍暗 */
+	.editor-tab.inactive-panel { opacity: 0.6; }
+	.editor-tab.inactive-panel.active { opacity: 0.85; }
+
 .editor-preview-toolbar {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 12px; background: var(--bg-card);
   border-bottom: 1px solid var(--border-card); flex-shrink: 0;
 }
 .editor-preview-toolbar .btn { font-size: 0.8rem; }
+.editor-preview-toolbar.hidden { display: none; }
+
+.split-panel.hidden { display: none; }
 
 /* ── Markdown / HTML 预览容器 ── */
 .editor-preview-wrapper {
@@ -438,12 +459,28 @@
   font-family: "Cascadia Code","Fira Code","JetBrains Mono",monospace;
   font-size: 0.85em;
 }
-.markdown-body pre {
-  background: var(--bg-input); border: 1px solid var(--border-light);
-  border-radius: var(--radius-md); padding: 12px 16px;
-  overflow-x: auto; font-size: 0.84rem; line-height: 1.6;
-}
-.markdown-body pre code { background: transparent; padding: 0; }
+	.markdown-body pre {
+	  background: var(--bg-input); border: 1px solid var(--border-light);
+	  border-radius: var(--radius-md); padding: 28px 16px 12px; position: relative;
+	  overflow-x: auto; font-size: 0.85rem; line-height: 1.6;
+	  color: var(--text-body); margin: 1em 0;
+	}
+	.markdown-body pre code {
+	  background: transparent; padding: 0; font-size: inherit;
+	  font-family: "Cascadia Code","Fira Code","JetBrains Mono","SF Mono",Consolas,monospace;
+	  color: inherit;
+	}
+	/* 代码块语言标签（利用 class="language-xxx"） */
+	.markdown-body pre[data-lang]::before {
+	  content: attr(data-lang);
+	  position: absolute; top: 0; left: 0; right: 0;
+	  padding: 3px 16px; font-size: 0.7rem; font-weight: 500;
+	  color: var(--text-tip); text-transform: uppercase;
+	  background: var(--border-light);
+	  border-radius: var(--radius-md) var(--radius-md) 0 0;
+	  letter-spacing: 0.5px;
+	  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+	}
 .markdown-body blockquote {
   border-left: 3px solid var(--primary); padding-left: 12px;
   color: var(--text-sub); margin: 0.8em 0;
