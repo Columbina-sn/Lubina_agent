@@ -43,6 +43,12 @@
 .tree-node-name { overflow: hidden; text-overflow: ellipsis; }
 .tree-children { overflow: hidden; transition: max-height 0.25s var(--ease-out); }
 .tree-children.collapsed { max-height: 0 !important; }
+.explorer-loading {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; padding: 24px;
+  color: var(--text-tip); font-size: 0.82rem;
+}
+.explorer-loading .spinner { width: 20px; height: 20px; border-width: 2px; }
 
 /* ═══════════════════════════════════════════
    2. 对话列表（聊天页左侧独立列）
@@ -392,6 +398,24 @@
   width: 7px; height: 7px; border-radius: 50%; background: var(--primary);
 }
 
+/* CM6 编辑器容器（替换旧 editor-body + editor-gutter + editor-textarea） */
+.editor-cm-wrapper {
+  flex: 1; min-height: 0; overflow: hidden;
+}
+.editor-cm-wrapper .cm-editor { height: 100%; }
+.editor-cm-wrapper .cm-scroller { overflow: auto; }
+
+/* CM6 自动换行（兼容 Facet 被树摇的情况，CSS 兜底） */
+.editor-cm-wrapper.cm-word-wrap .cm-content {
+  white-space: pre-wrap !important;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.editor-cm-wrapper.cm-word-wrap .cm-line {
+  white-space: pre-wrap !important;
+}
+
+/* 保留旧编辑器样式作为 CM6 降级时的后备 */
 .editor-body { flex: 1; display: flex; overflow: hidden; position: relative; }
 .editor-gutter {
   flex-shrink: 0; min-width: 48px; background: var(--editor-gutter-bg);

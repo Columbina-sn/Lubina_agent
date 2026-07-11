@@ -162,6 +162,32 @@ const Chat = (() => {
     document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); } });
   }
 
+  /** 弹窗提醒用户先打开工作区文件夹 */
+  function _showWorkspaceRequiredModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-dialog" style="max-width:420px;">
+        <h3>需要工作区</h3>
+        <p>Plan / Auto 模式可能会操作文件，请先在左侧文件树打开一个文件夹作为工作区。</p>
+        <p style="font-size:0.8rem;color:var(--text-tip);margin-top:4px;">即使是一个空文件夹也可以，Agent 只会在此文件夹内操作文件。</p>
+        <div class="modal-actions" style="margin-top:16px;">
+          <button class="btn btn-ghost" id="wsModalCancel">取消</button>
+          <button class="btn btn-primary" id="wsModalOpen">打开文件夹</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#wsModalCancel').onclick = () => overlay.remove();
+    overlay.querySelector('#wsModalOpen').onclick = () => {
+      overlay.remove();
+      if (typeof FileExplorer !== 'undefined') FileExplorer.openFolder();
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); }
+    });
+  }
+
   function _getActiveConversation() { return conversations.find(c => c.id === activeConversationId) || null; }
 
   function _switchConversation(id) {
@@ -200,6 +226,15 @@ const Chat = (() => {
     if (!chatModelProviderId || !chatModelName) {
       _showToast('请先在输入框右下角选择模型', 'warning');
       return;
+    }
+
+    // Plan / Auto 模式：必须有工作区
+    if (chatMode === 'plan' || chatMode === 'agent') {
+      const wsRoot = window.__lubina_workspace_root;
+      if (!wsRoot) {
+        _showWorkspaceRequiredModal();
+        return;
+      }
     }
 
     // 锁定模式和模型
@@ -333,7 +368,7 @@ const Chat = (() => {
       const response = await fetch(`${API_BASE}/api/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true }),
+        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true, sandbox_root: window.__lubina_workspace_root || null }),
         signal: controller.signal,
       });
 
@@ -522,7 +557,7 @@ const Chat = (() => {
 
   function _welcomeHTML() {
     return `<div class="welcome-screen">
-      <img class="welcome-logo" src="static/Lubina.svg" alt="Lubina" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="width:64px;height:64px;border-radius:18px;object-fit:contain;background:var(--primary-gradient);padding:10px;box-shadow:0 6px 24px var(--primary-glow);animation:floatLogo 3s ease-in-out infinite;">
+      <img class="welcome-logo" src="/Lubina.svg" alt="Lubina" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="width:64px;height:64px;border-radius:18px;object-fit:contain;background:var(--primary-gradient);padding:10px;box-shadow:0 6px 24px var(--primary-glow);animation:floatLogo 3s ease-in-out infinite;">
       <div class="welcome-logo" style="display:none;">AI</div>
       <h2>Lubina</h2>
       <p>你的桌面学习伙伴</p>

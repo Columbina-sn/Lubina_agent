@@ -11,6 +11,21 @@ const App = (() => {
   };
   let els = {};
 
+  // 全局工作区根目录（file-explorer.js 打开文件夹时设置，chat.js 发送前校验）
+  window.__lubina_workspace_root = null;
+
+  /** 安全校验：检查文件路径是否在工作区内 */
+  function isPathInWorkspace(filePath) {
+    const root = window.__lubina_workspace_root;
+    if (!root) return false;
+    // 统一分隔符为 / 并小写比较
+    const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+    const rootNorm = root.replace(/\\/g, '/').toLowerCase();
+    // 禁止路径穿越 (path traversal)
+    if (normalized.includes('..')) return false;
+    return normalized.startsWith(rootNorm);
+  }
+
   function init() {
     els.appShell = document.getElementById('appShell');
     els.fileExplorer = document.getElementById('fileExplorer');
@@ -87,10 +102,38 @@ const App = (() => {
 
   function unmountPage(id) {
     if (id === 'home' && typeof Chat !== 'undefined') Chat.destroy();
-    if (id === 'editor' && typeof Editor !== 'undefined') Editor.destroy();
-    if (id === 'settings' && typeof Settings !== 'undefined') {
-      return Settings.destroy();  // 可能返回 Promise（未保存弹窗）
+    if (id === 'editor' && typeof Editor !== 'undefined') {
+      return _editorUnmountCheck();  // 返回 Promise，有未保存修改时弹窗
     }
+    if (id === 'settings' && typeof Settings !== 'undefined') {
+      return Settings.destroy();
+    }
+  }
+
+  function _editorUnmountCheck() {
+    if (typeof Editor === 'undefined') return;
+    const files = Editor.getOpenFiles ? Editor.getOpenFiles() : [];
+    const dirty = files.some(f => f.modified);
+    if (!dirty) { Editor.destroy(); return; }
+    return new Promise((resolve, reject) => {
+      const ov = document.createElement('div'); ov.className = 'modal-overlay';
+      ov.innerHTML = `<div class="modal-dialog" style="max-width:400px;">
+        <h3>未保存的修改</h3><p>你有文件尚未保存，离开编辑器将丢失修改。</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="_euDiscard">不保存</button>
+          <button class="btn btn-ghost" id="_euCancel">取消</button>
+          <button class="btn btn-primary" id="_euSave">保存并离开</button>
+        </div></div>`;
+      document.body.appendChild(ov);
+      ov.querySelector('#_euDiscard').onclick = () => { ov.remove(); Editor.destroy(); resolve(); };
+      ov.querySelector('#_euCancel').onclick = () => { ov.remove(); reject(new Error('cancelled')); };
+      ov.querySelector('#_euSave').onclick = async () => {
+        ov.remove();
+        if (Editor.saveFile) await Editor.saveFile();
+        Editor.destroy(); resolve();
+      };
+      ov.addEventListener('click', e => { if (e.target === ov) { ov.remove(); reject(new Error('cancelled')); } });
+    });
   }
 
   function mountPage(id) {
@@ -328,9 +371,10 @@ const App = (() => {
       case 'editor': return `
         <div class="page-container" id="editorPage">
           <div class="editor-tabs" id="editorTabs"></div>
-          <div class="editor-container"><div class="editor-body" id="editorBody"><div class="editor-gutter" id="editorGutter"></div><textarea class="editor-textarea" id="editorTextarea" spellcheck="false" placeholder="从左侧文件树打开文件…"></textarea></div>
-          <div class="editor-binary-notice hidden" id="editorBinaryNotice"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg><h3>不支持打开此类二进制文件</h3><p id="editorBinaryExt"></p></div>
-          <div class="editor-empty-state" id="editorEmptyState"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg><h3>编辑器</h3><p>从左侧文件树打开一个文件<br>或拖拽文件到此处</p></div></div></div>`;
+          <div class="editor-container">
+            <div class="editor-cm-wrapper" id="editorCmWrapper"></div>
+            <div class="editor-binary-notice hidden" id="editorBinaryNotice"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg><h3>不支持打开此类二进制文件</h3><p id="editorBinaryExt"></p></div>
+            <div class="editor-empty-state" id="editorEmptyState"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg><h3>编辑器</h3><p>从左侧文件树打开一个文件<br>或拖拽文件到此处</p></div></div></div>`;
       case 'exercises': return `<div class="page-container"><div class="placeholder-page"><h2>错题本</h2><p>拍照/截图/粘贴题目 → AI 解答 → 自动归类 → 定期复习</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
       case 'knowledge': return `<div class="page-container"><div class="placeholder-page"><h2>知识库</h2><p>导入课件、笔记、论文，AI 基于你的资料回答问题</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
       case 'settings': return `
@@ -483,6 +527,7 @@ const App = (() => {
   return {
     init, showPage, splitPage, closeSplit, toggleFileExplorer, applyTheme, applyFontSize,
     addUnread, updateBadge, getState: () => state,
+    isPathInWorkspace,
     toggleAvatarDropdown, showLoginModal, closeLoginModal, switchLoginMode, handleLogin, logout,
     showToast, updateAvatarUI
   };

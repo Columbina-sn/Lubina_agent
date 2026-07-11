@@ -1,6 +1,6 @@
 /* ============================================================
-   file-explorer.js —— 文件树浏览器
-   打开文件夹 · 树形渲染 · 搜索过滤 · 点击打开到编辑器
+   file-explorer.js —— 文件树浏览器 v3
+   打开文件夹 · 真实文件系统 · 懒加载子目录 · 工作区根目录
    ============================================================ */
 
 const FileExplorer = (() => {
@@ -10,6 +10,7 @@ const FileExplorer = (() => {
   let rootPath = null;
   let treeData = null;        // { name, path, isDir, children }
   let searchQuery = '';
+  let loadedDirs = new Set(); // 已展开/加载过的目录路径（懒加载用）
 
   // 文件图标映射
   const FILE_ICONS = {
@@ -21,20 +22,40 @@ const FileExplorer = (() => {
     html: { icon: '⬡',   cls: 'file-html' },
     css:  { icon: '#',    cls: 'file-css' },
     scss: { icon: '#',    cls: 'file-css' },
+    less: { icon: '#',    cls: 'file-css' },
     json: { icon: '{}',   cls: 'file-json' },
     md:   { icon: 'MD',   cls: 'file-md' },
     txt:  { icon: '¶',    cls: 'file-default' },
     svg:  { icon: '◉',    cls: 'file-img' },
     png:  { icon: '▦',    cls: 'file-img' },
     jpg:  { icon: '▦',    cls: 'file-img' },
+    jpeg: { icon: '▦',    cls: 'file-img' },
     gif:  { icon: '▦',    cls: 'file-img' },
+    ico:  { icon: '▦',    cls: 'file-img' },
+    xml:  { icon: '⬡',   cls: 'file-html' },
+    yaml: { icon: '{}',   cls: 'file-json' },
+    yml:  { icon: '{}',   cls: 'file-json' },
+    toml: { icon: '{}',   cls: 'file-json' },
+    rs:   { icon: 'RS',   cls: 'file-js' },
+    go:   { icon: 'GO',   cls: 'file-js' },
+    java: { icon: 'JV',   cls: 'file-js' },
+    c:    { icon: 'C',    cls: 'file-js' },
+    cpp:  { icon: 'C++',  cls: 'file-js' },
+    h:    { icon: 'H',    cls: 'file-js' },
+    hpp:  { icon: 'H',    cls: 'file-js' },
+    vue:  { icon: '⬡',   cls: 'file-html' },
+    sql:  { icon: 'DB',   cls: 'file-json' },
+    sh:   { icon: '>_',   cls: 'file-json' },
+    bat:  { icon: '>_',   cls: 'file-json' },
+    ps1:  { icon: '>_',   cls: 'file-json' },
+    lock: { icon: '{}',   cls: 'file-json' },
   };
 
   const TEXT_EXTS = new Set([
     'txt','md','py','js','ts','jsx','tsx','html','css','scss','less',
     'json','xml','yaml','yml','toml','ini','cfg','sh','bash','zsh',
     'c','cpp','h','hpp','java','go','rs','rb','php','swift','kt',
-    'r','m','sql','vue','svelte','astro','tex','csv','log',
+    'r','m','sql','vue','svelte','astro','tex','csv','log','svg',
     'gitignore','env','dockerfile','makefile','cmake','bat','ps1',
     'conf','config','editorconfig','eslintrc','prettierrc',
   ]);
@@ -62,99 +83,89 @@ const FileExplorer = (() => {
   }
 
   async function openFolder() {
-    // 使用 Tauri 原生对话框或浏览器降级
     if (typeof Bridge !== 'undefined' && Bridge.isTauri()) {
-      const result = await Bridge.openFileDialog();
+      const result = await Bridge.openFolderDialog();
       if (result) {
         rootPath = typeof result === 'string' ? result : result.path || result;
+        window.__lubina_workspace_root = rootPath;
+        loadedDirs = new Set();
         await loadDirectory(rootPath);
       }
     } else {
-      // 浏览器环境：使用模拟数据演示
-      const demoPath = prompt('输入文件夹路径（演示模式）：', 'D:\\Desktop_agent\\src');
-      if (demoPath) {
-        rootPath = demoPath;
-        await loadDirectoryMock(demoPath);
-      }
+      showToast('请使用 Lubina 桌面版打开文件夹', 'warning');
     }
   }
 
   async function loadDirectory(dirPath) {
     try {
-      // 将来通过 Tauri API 或后端获取目录结构
-      // 目前用模拟数据
-      await loadDirectoryMock(dirPath);
+      treeEl.innerHTML = '<div class="explorer-loading"><div class="spinner"></div><p>加载中…</p></div>';
+
+      // 第一层：加载根目录内容
+      const entries = await Bridge.listDir(dirPath);
+      // 只加载第一层子节点，更深层的目录标记为懒加载
+      const children = entries.map(e => {
+        const ext = e.name.split('.').pop()?.toLowerCase();
+        return {
+          name: e.name,
+          path: e.path,
+          isDir: e.isDir,
+          ext: ext,
+          children: e.isDir ? [] : undefined,
+          lazy: e.isDir,  // 目录默认懒加载
+        };
+      });
+
+      treeData = {
+        name: dirPath.split(/[/\\]/).pop() || dirPath,
+        path: dirPath,
+        isDir: true,
+        children: children,
+      };
+
+      renderTree();
     } catch (err) {
       console.error('读取目录失败:', err);
       treeData = null;
-      renderTree();
+      treeEl.innerHTML = `
+        <div class="explorer-empty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          <p>无法读取目录</p>
+          <p style="font-size:0.75rem;color:var(--text-tip);">${esc(err.message)}</p>
+          <button class="btn btn-ghost btn-sm" data-action="open-folder-empty">重新选择</button>
+        </div>`;
+      treeEl.querySelector('[data-action="open-folder-empty"]')
+        ?.addEventListener('click', openFolder);
     }
   }
 
-  // 模拟目录加载（等后端就绪后替换）
-  async function loadDirectoryMock(dirPath) {
-    const name = dirPath.split(/[/\\]/).pop() || dirPath;
-    // 从 bridge 读取目录（如果可用）
-    if (typeof Bridge !== 'undefined') {
-      try {
-        // 尝试列出目录内容 — 这是占位，等后端 API 就绪
-        const files = await listDirFallback(dirPath);
-        treeData = buildTree(name, dirPath, files);
-      } catch (_) {
-        treeData = createDemoTree(name, dirPath);
-      }
-    } else {
-      treeData = createDemoTree(name, dirPath);
+  /** 懒加载：展开目录时才加载其子节点 */
+  async function lazyLoadChildren(node) {
+    if (!node.isDir || node.lazy === false) return;
+    if (loadedDirs.has(node.path)) return; // 已加载过
+
+    try {
+      const entries = await Bridge.listDir(node.path);
+      node.children = entries.map(e => {
+        const ext = e.name.split('.').pop()?.toLowerCase();
+        return {
+          name: e.name,
+          path: e.path,
+          isDir: e.isDir,
+          ext: ext,
+          children: e.isDir ? [] : undefined,
+          lazy: e.isDir,
+        };
+      });
+      node.lazy = false;
+      loadedDirs.add(node.path);
+    } catch (_) {
+      // 无权限读取的目录：保持空 children
+      node.lazy = false;
+      node.children = [];
+      loadedDirs.add(node.path);
     }
-    renderTree();
-  }
-
-  function listDirFallback(dirPath) {
-    // 占位：等 Tauri fs API 或后端端点就绪
-    // 目前返回空数组 → 触发 demo tree
-    return Promise.reject(new Error('Not implemented'));
-  }
-
-  function createDemoTree(name, path) {
-    return {
-      name,
-      path,
-      isDir: true,
-      children: [
-        {
-          name: 'src', path: path + '/src', isDir: true,
-          children: [
-            { name: 'index.html', path: path + '/src/index.html', isDir: false, ext: 'html' },
-            { name: 'app.js', path: path + '/src/app.js', isDir: false, ext: 'js' },
-            { name: 'chat.js', path: path + '/src/chat.js', isDir: false, ext: 'js' },
-            { name: 'style.css', path: path + '/src/style.css', isDir: false, ext: 'css' },
-          ]
-        },
-        {
-          name: 'docs', path: path + '/docs', isDir: true,
-          children: [
-            { name: 'README.md', path: path + '/docs/README.md', isDir: false, ext: 'md' },
-            { name: 'CHANGELOG.md', path: path + '/docs/CHANGELOG.md', isDir: false, ext: 'md' },
-          ]
-        },
-        { name: 'package.json', path: path + '/package.json', isDir: false, ext: 'json' },
-        { name: 'README.md', path: path + '/README.md', isDir: false, ext: 'md' },
-      ]
-    };
-  }
-
-  function buildTree(name, path, files) {
-    // 从文件列表构建树结构（将来用）
-    return {
-      name, path, isDir: true,
-      children: files.map(f => ({
-        name: f.name,
-        path: f.path,
-        isDir: f.isDir || false,
-        ext: f.name.split('.').pop()?.toLowerCase(),
-        children: f.isDir ? [] : undefined,
-      }))
-    };
   }
 
   // ===== 渲染 =====
@@ -175,56 +186,75 @@ const FileExplorer = (() => {
       return;
     }
 
-    treeEl.innerHTML = '';
-    renderNode(treeData, treeEl, 0);
+    // 保留展开状态（记录当前展开的目录路径）
+    const expandedPaths = new Set();
+    treeEl.querySelectorAll('.tree-children:not(.collapsed)').forEach(c => {
+      const row = c.previousElementSibling;
+      const pathEl = row?.querySelector?.('.tree-node-path');
+      if (pathEl) expandedPaths.add(pathEl.dataset.path);
+    });
 
-    // 展开第一层
-    treeEl.querySelectorAll('.tree-children').forEach(c => {
+    treeEl.innerHTML = '';
+    renderNode(treeData, treeEl, 0, expandedPaths);
+
+    // 展开第一层（默认打开根目录的第一层）
+    treeEl.querySelectorAll(':scope > .tree-node + .tree-children').forEach(c => {
       c.classList.remove('collapsed');
     });
-    treeEl.querySelectorAll('.tree-node-arrow').forEach(a => {
+    treeEl.querySelectorAll(':scope > .tree-node .tree-node-arrow').forEach(a => {
       a.classList.add('expanded');
     });
   }
 
-  function renderNode(node, parent, depth) {
+  function renderNode(node, parent, depth, expandedPaths) {
     const matchesSearch = !searchQuery || node.name.toLowerCase().includes(searchQuery);
 
+    // 搜索模式下：只显示匹配项（包括其父路径在渲染时自然展开）
+    if (searchQuery && !matchesSearch && node.isDir) {
+      // 目录不匹配但子节点可能匹配 → 仍渲染目录但折叠
+      if (!node.children || node.children.length === 0) return;
+    }
+    if (searchQuery && !matchesSearch && !node.isDir) return;
+
     if (node.isDir) {
-      // 文件夹
+      const wasExpanded = expandedPaths.has(node.path);
+
       const row = document.createElement('div');
       row.className = 'tree-node';
       row.style.setProperty('--depth', depth);
       row.innerHTML = `
-        <span class="tree-node-arrow expanded">▶</span>
+        <span class="tree-node-arrow ${wasExpanded ? 'expanded' : ''}">▶</span>
         <span class="tree-node-icon folder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
         <span class="tree-node-name">${esc(node.name)}</span>`;
       parent.appendChild(row);
 
       const childrenContainer = document.createElement('div');
-      childrenContainer.className = 'tree-children';
+      childrenContainer.className = `tree-children${wasExpanded ? '' : ' collapsed'}`;
       parent.appendChild(childrenContainer);
 
-      row.querySelector('.tree-node-arrow').addEventListener('click', (e) => {
+      // 展开/折叠 + 懒加载
+      row.querySelector('.tree-node-arrow').addEventListener('click', async (e) => {
         e.stopPropagation();
-        const arrow = row.querySelector('.tree-node-arrow');
-        arrow.classList.toggle('expanded');
-        childrenContainer.classList.toggle('collapsed');
+        await _toggleDir(row, childrenContainer, node);
+      });
+      row.addEventListener('click', async () => {
+        await _toggleDir(row, childrenContainer, node);
       });
 
-      row.addEventListener('click', () => {
-        const arrow = row.querySelector('.tree-node-arrow');
-        arrow.classList.toggle('expanded');
-        childrenContainer.classList.toggle('collapsed');
-      });
-
-      if (node.children) {
-        node.children.forEach(child => renderNode(child, childrenContainer, depth + 1));
+      // 渲染子节点（可能为空但已标记 lazy）
+      if (node.children && node.children.length > 0) {
+        node.children.forEach(child => renderNode(child, childrenContainer, depth + 1, expandedPaths));
+      } else if (node.lazy && wasExpanded) {
+        // 之前展开过但未加载 → 触发懒加载
+        lazyLoadChildren(node).then(() => {
+          childrenContainer.innerHTML = '';
+          if (node.children) {
+            node.children.forEach(child => renderNode(child, childrenContainer, depth + 1, expandedPaths));
+          }
+        });
       }
     } else {
-      // 文件
-      if (!matchesSearch) return;
-
+      // 文件节点
       const ext = node.ext || node.name.split('.').pop()?.toLowerCase();
       const iconInfo = FILE_ICONS[ext] || { cls: 'file-default' };
 
@@ -241,12 +271,27 @@ const FileExplorer = (() => {
     }
   }
 
+  async function _toggleDir(row, childrenContainer, node) {
+    const arrow = row.querySelector('.tree-node-arrow');
+    const isExpanding = childrenContainer.classList.contains('collapsed');
+
+    if (isExpanding && node.lazy) {
+      // 懒加载子节点
+      await lazyLoadChildren(node);
+      if (node.children && node.children.length > 0) {
+        childrenContainer.innerHTML = '';
+        node.children.forEach(child => renderNode(child, childrenContainer, parseInt(row.style.getPropertyValue('--depth')) + 1, new Set()));
+      }
+    }
+
+    arrow.classList.toggle('expanded');
+    childrenContainer.classList.toggle('collapsed');
+  }
+
   function openFile(node) {
     const ext = node.ext || node.name.split('.').pop()?.toLowerCase();
 
-    // 检测二进制文件
     if (TEXT_EXTS.has(ext) || ext === 'svg') {
-      // 纯文本 → 切换到编辑器
       App.showPage('editor');
       setTimeout(() => {
         if (typeof Editor !== 'undefined' && Editor.openFile) {
@@ -254,7 +299,6 @@ const FileExplorer = (() => {
         }
       }, 150);
     } else {
-      // 二进制文件 → 编辑器显示不支持
       App.showPage('editor');
       setTimeout(() => {
         if (typeof Editor !== 'undefined' && Editor.openBinary) {
@@ -270,11 +314,24 @@ const FileExplorer = (() => {
     return div.innerHTML;
   }
 
+  function showToast(msg, type) {
+    if (typeof App !== 'undefined' && App.showToast) {
+      App.showToast(msg, type || 'info');
+    }
+  }
+
   // ===== 公开 API =====
   return {
     init,
     openFolder,
     getRootPath: () => rootPath,
     getTreeData: () => treeData,
+    /** 编程式设置工作区（供拖拽/右键打开等外部入口使用） */
+    setWorkspace: async (dirPath) => {
+      rootPath = dirPath;
+      window.__lubina_workspace_root = dirPath;
+      loadedDirs = new Set();
+      await loadDirectory(dirPath);
+    },
   };
 })();

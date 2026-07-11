@@ -1,7 +1,9 @@
 /* ============================================================
-   bridge.js —— Tauri 原生能力桥接层
-   当运行在 Tauri WebView 中时，提供原生 API 调用
-   在普通浏览器中打开时，这些调用会静默降级
+   bridge.js —— Tauri 原生能力桥接层 v3
+
+   全部通过 window.__TAURI_INTERNALS__.invoke() 调用插件 IPC。
+   这是 Tauri v2 底层通信通道，窗口控制已验证可用。
+   插件 IPC 格式：plugin:<插件名>|<操作>
    ============================================================ */
 
 const Bridge = (() => {
@@ -9,7 +11,7 @@ const Bridge = (() => {
   const isTauri = () => typeof window !== 'undefined' && window.__TAURI_INTERNALS__ != null;
 
   /**
-   * 安全调用 Tauri API，降级到浏览器行为
+   * 安全调用 Tauri IPC，降级到浏览器行为
    * @param {Function} tauriCall - 实际调用函数
    * @param {*} fallback - 降级返回值
    */
@@ -21,47 +23,61 @@ const Bridge = (() => {
     try {
       return await tauriCall();
     } catch (e) {
-      console.warn('[Bridge] Tauri 调用失败:', e.message);
+      console.warn('[Bridge] Tauri 调用失败:', e);
+      console.warn('[Bridge] 错误详情:', typeof e, JSON.stringify(e));
       return fallback;
     }
   }
 
+  /** 统一 invoke 入口 */
+  function _invoke(cmd, args = {}) {
+    return window.__TAURI_INTERNALS__.invoke(cmd, args);
+  }
+
   // ===== 文件对话框 =====
+
   async function openFileDialog(filters = [{ name: '所有文件', extensions: ['*'] }]) {
     return _safeCall(async () => {
-      const { open } = window.__TAURI__.dialog;
-      return await open({ filters, multiple: false });
+      return await _invoke('plugin:dialog|open', { options: { filters, multiple: false } });
+    }, null);
+  }
+
+  /** 打开文件夹选择对话框（选择工作区根目录） */
+  async function openFolderDialog() {
+    return _safeCall(async () => {
+      const result = await _invoke('plugin:dialog|open', {
+        options: { directory: true, multiple: false, title: '选择文件夹作为工作区' }
+      });
+      return result || null;
     }, null);
   }
 
   async function saveFileDialog(defaultName = 'untitled') {
     return _safeCall(async () => {
-      const { save } = window.__TAURI__.dialog;
-      return await save({ defaultPath: defaultName });
+      return await _invoke('plugin:dialog|save', { options: { defaultPath: defaultName } });
     }, null);
   }
 
   // ===== 剪贴板 =====
+
   async function readClipboard() {
     return _safeCall(async () => {
-      const { readText } = window.__TAURI__.clipboard;
-      return await readText();
+      return await _invoke('plugin:clipboard|read_text');
     }, (await navigator.clipboard?.readText()) || '');
   }
 
   async function writeClipboard(text) {
     return _safeCall(async () => {
-      const { writeText } = window.__TAURI__.clipboard;
-      await writeText(text);
+      await _invoke('plugin:clipboard|write_text', { data: text });
       return true;
     }, (() => { navigator.clipboard?.writeText(text); return true; })());
   }
 
   // ===== 系统通知 =====
+
   async function sendNotification(title, body) {
     return _safeCall(async () => {
-      const { sendNotification: notify } = window.__TAURI__.notification;
-      await notify({ title, body });
+      await _invoke('plugin:notification|notify', { title, body });
     }, (() => {
       if (Notification.permission === 'granted') {
         new Notification(title, { body });
@@ -70,54 +86,64 @@ const Bridge = (() => {
   }
 
   // ===== Shell 打开 =====
+
   async function openExternal(url) {
     return _safeCall(async () => {
-      const { open } = window.__TAURI__.shell;
-      await open(url);
+      await _invoke('plugin:shell|open', { path: url });
     }, (() => { window.open(url, '_blank'); })());
   }
 
   // ===== 文件系统 =====
+
+  /** 读取文本文件内容（自定义 Rust 命令，无 scope 限制） */
   async function readTextFile(path) {
     return _safeCall(async () => {
-      const { readTextFile: tauriRead } = window.__TAURI__.fs;
-      return await tauriRead(path);
+      return await _invoke('read_file_content', { path });
     }, null);
+  }
+
+  /** 列出目录内容（自定义 Rust 命令，单层，目录优先 + 字母排序） */
+  async function listDir(dirPath) {
+    return _safeCall(async () => {
+      const entries = await _invoke('list_dir', { path: dirPath });
+      return (entries || []).map(e => ({
+        name: e.name,
+        path: e.path,
+        isDir: e.is_dir,
+        children: e.is_dir ? [] : undefined,
+      }));
+    }, []);
   }
 
   async function writeTextFile(path, content) {
     return _safeCall(async () => {
-      const { writeTextFile: tauriWrite } = window.__TAURI__.fs;
-      await tauriWrite(path, content);
+      await _invoke('write_file_content', { path, content });
       return true;
     }, null);
   }
 
-  // ===== 窗口控制（Tauri v2 直接 IPC — 与 @tauri-apps/api 内部逻辑一致）=====
-  /**
-   * 直接使用 window.__TAURI_INTERNALS__.invoke() 调用窗口 IPC 命令。
-   * 这是 @tauri-apps/api/window.js 内部的实现方式，零依赖、零导入。
-   * 命令格式：plugin:window|<操作>，参数：{ label: "窗口标签" }
-   */
+  // ===== 窗口控制 =====
+  /** 命令格式：plugin:window|<操作>，参数：{ label: "窗口标签" } */
+
   function _winLabel() {
     return window.__TAURI_INTERNALS__.metadata.currentWindow.label;
   }
 
   async function windowMinimize() {
     return _safeCall(() =>
-      window.__TAURI_INTERNALS__.invoke('plugin:window|minimize', { label: _winLabel() })
+      _invoke('plugin:window|minimize', { label: _winLabel() })
     );
   }
 
   async function windowToggleMaximize() {
     return _safeCall(() =>
-      window.__TAURI_INTERNALS__.invoke('plugin:window|toggle_maximize', { label: _winLabel() })
+      _invoke('plugin:window|toggle_maximize', { label: _winLabel() })
     );
   }
 
   async function windowClose() {
     return _safeCall(() =>
-      window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: _winLabel() })
+      _invoke('plugin:window|close', { label: _winLabel() })
     );
   }
 
@@ -125,12 +151,14 @@ const Bridge = (() => {
   return {
     isTauri,
     openFileDialog,
+    openFolderDialog,
     saveFileDialog,
     readClipboard,
     writeClipboard,
     sendNotification,
     openExternal,
     readTextFile,
+    listDir,
     writeTextFile,
     windowMinimize,
     windowToggleMaximize,

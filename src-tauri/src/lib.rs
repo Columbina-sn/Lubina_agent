@@ -1,11 +1,60 @@
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 
+use std::fs;
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tauri::Manager;
+
+// ═══════════════════════════════════════════════
+// 自定义文件系统命令（绕过插件 scope 限制）
+// ═══════════════════════════════════════════════
+
+/// 列出目录内容
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("路径不是目录: {}", path));
+    }
+    let entries = fs::read_dir(dir).map_err(|e| format!("读取目录失败: {}", e))?;
+    let mut result = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取条目失败: {}", e))?;
+        let file_type = entry.file_type().map_err(|e| format!("获取文件类型失败: {}", e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = entry.path();
+        result.push(DirEntry {
+            name,
+            path: entry_path.to_string_lossy().to_string(),
+            is_dir: file_type.is_dir(),
+        });
+    }
+    // 目录在前，文件在后，按名称排序
+    result.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(result)
+}
+
+/// 读取文本文件内容
+#[tauri::command]
+fn read_file_content(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
+}
+
+/// 写入文本文件内容
+#[tauri::command]
+fn write_file_content(path: String, content: String) -> Result<(), String> {
+    fs::write(&path, &content).map_err(|e| format!("写入文件失败: {}", e))
+}
+
+#[derive(serde::Serialize)]
+struct DirEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+}
 
 /// 存放 Python 子进程句柄，Tauri 退出时用它来杀进程
 struct PythonBackend(Mutex<Option<Child>>);
@@ -20,6 +69,9 @@ fn project_root() -> &'static Path {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .invoke_handler(tauri::generate_handler![list_dir, read_file_content, write_file_content])
         .setup(|app| {
             // ═══════════════════════════════════════
             // 第 1 步：清理上次可能残留的孤儿进程

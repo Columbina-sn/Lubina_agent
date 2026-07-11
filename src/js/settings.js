@@ -186,6 +186,20 @@ const Settings = (() => {
       </div>
       <div class="settings-card" style="margin-top:14px;">
         <div class="form-group">
+          <label>编辑器</label>
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span>自动换行</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingWordWrap" ${_getWordWrap() ? 'checked' : ''}
+                     onchange="Settings.onWordWrapChange(this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <span class="form-hint">长行超过编辑器宽度时自动折行显示</span>
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group">
           <label>字体大小</label>
           <p class="section-desc" style="margin:0 0 8px 0;">全局缩放所有文字和界面元素</p>
           <div class="font-size-slider">
@@ -507,8 +521,20 @@ const Settings = (() => {
   function confirmDeleteProvider(id) {
     const p = providers.find(x => x.id === id);
     if (!p) return;
-    if (!confirm(`确定要删除供应商「${p.name}」吗？\n关联的模型也会一并删除。`)) return;
-    _deleteProvider(id);
+    _showConfirmModal(
+      '删除供应商',
+      `确定要删除供应商「${p.name}」吗？<br>关联的模型也会一并删除。`,
+      () => _deleteProvider(id)
+    );
+  }
+
+  function _showConfirmModal(title, msg, onOk) {
+    const ov = document.createElement('div'); ov.className = 'modal-overlay';
+    ov.innerHTML = `<div class="modal-dialog" style="max-width:400px;"><h3>${title}</h3><p>${msg}</p><div class="modal-actions"><button class="btn btn-ghost" id="_scCancel">取消</button><button class="btn btn-accent" id="_scOk">确认删除</button></div></div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#_scCancel').onclick = () => ov.remove();
+    ov.querySelector('#_scOk').onclick = () => { ov.remove(); onOk(); };
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
   }
 
   async function _deleteProvider(id) {
@@ -627,6 +653,11 @@ const Settings = (() => {
         <div style="color:var(--text-sub);">版本 0.2.0</div>
         <div style="color:var(--text-tip);font-size:0.8rem;margin-top:6px;">桌面 AI 学习伙伴</div>
         <div style="color:var(--text-tip);font-size:0.75rem;margin-top:16px;">Tauri 2.0 + Python FastAPI</div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;text-align:center;padding:16px;font-size:0.75rem;color:var(--text-tip);line-height:1.8;">
+        <p>编辑器内核：<a href="https://codemirror.net/" target="_blank" style="color:var(--primary);">CodeMirror 6</a></p>
+        <p>&copy; 2018–2024 Marijn Haverbeke and contributors</p>
+        <p style="font-size:0.7rem;opacity:0.7;">基于 MIT 许可证使用</p>
       </div>`;
   }
 
@@ -662,6 +693,21 @@ const Settings = (() => {
     }
   }
 
+  // ===== 编辑器设置（跨模块）=====
+
+  function _getWordWrap() {
+    try { return localStorage.getItem('lubina_word_wrap') === 'true'; }
+    catch (_) { return false; }
+  }
+
+  function onWordWrapChange(enabled) {
+    try { localStorage.setItem('lubina_word_wrap', String(enabled)); } catch (_) {}
+    // 如果编辑器当前打开，即时应用
+    if (typeof Editor !== 'undefined' && Editor.setWordWrap) {
+      Editor.setWordWrap(enabled);
+    }
+  }
+
   function _esc(s) {
     const d = document.createElement('div');
     d.textContent = s || '';
@@ -681,6 +727,7 @@ const Settings = (() => {
     saveProviderDetail, toggleProvider, confirmDeleteProvider,
     showAddModel, addModel, toggleModel, deleteModel,
     onThemeChange, onFontSizeInput, onMaxTurnsChange, restoreDefaults,
+    onWordWrapChange,
     toggleVisible,
   };
 })();
