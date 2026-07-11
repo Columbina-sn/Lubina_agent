@@ -415,13 +415,7 @@ const FileExplorer = (() => {
     }
   }
 
-  // ===== 公开 API =====
-  return {
-    init,
-    openFolder,
-    getRootPath: () => rootPath,
-    getTreeData: () => treeData,
-    // ── 文件夹信任检查 ──
+  // ── 文件夹信任检查 ──
 
   /** 读取已信任的文件夹列表（路径标准化后存储） */
   function _getTrustedFolders() {
@@ -482,7 +476,13 @@ const FileExplorer = (() => {
     });
   }
 
-  /** 编程式设置工作区（也需安全检查） */
+  // ===== 公开 API =====
+  return {
+    init,
+    openFolder,
+    getRootPath: () => rootPath,
+    getTreeData: () => treeData,
+    /** 编程式设置工作区（也需安全检查） */
     setWorkspace: async (dirPath) => {
       rootPath = dirPath;
       window.__lubina_workspace_root = dirPath;
