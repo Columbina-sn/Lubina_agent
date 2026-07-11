@@ -8,11 +8,7 @@ const Editor = (() => {
   let openFiles = [];
   let activeFileIndex = -1;
   let cmView = null;
-
-  let wordWrapEnabled = (() => {
-    try { return localStorage.getItem('lubina_word_wrap') === 'true'; }
-    catch (_) { return false; }
-  })();
+  let previewMode = false;  // .md/.html 预览模式
 
   const TEXT_EXTS = new Set([
     'txt','md','py','js','ts','jsx','tsx','html','css','scss','less',
@@ -46,8 +42,8 @@ const Editor = (() => {
   // mount / destroy
   // ================================================================
 
-  async function mount() { refreshUI(); _applyWordWrap(); }
-  function destroy() { _saveCurrentContent(); if (cmView) { cmView.destroy(); cmView = null; } openFiles = []; activeFileIndex = -1; }
+  async function mount() { refreshUI(); }
+  function destroy() { _saveCurrentContent(); _hideToolbar(); if (cmView) { cmView.destroy(); cmView = null; } const pw = document.getElementById('editorPreviewWrapper'); if (pw) pw.remove(); openFiles = []; activeFileIndex = -1; previewMode = false; }
 
   // ================================================================
   // 打开文件
@@ -63,7 +59,7 @@ const Editor = (() => {
       try { if (typeof Bridge !== 'undefined' && Bridge.isTauri()) f.content = await Bridge.readTextFile(filePath) || ''; }
       catch (err) { f.content = '// 无法读取文件: ' + err.message; }
     }
-    openFiles.push(f); activeFileIndex = openFiles.length - 1;
+    openFiles.push(f); activeFileIndex = openFiles.length - 1; previewMode = false;
     await refreshUI();
   }
 
@@ -79,7 +75,7 @@ const Editor = (() => {
   // 切换 / 关闭
   // ================================================================
 
-  function switchFile(index) { if (index < 0 || index >= openFiles.length) return; _saveCurrentContent(); activeFileIndex = index; refreshUI(); }
+  function switchFile(index) { if (index < 0 || index >= openFiles.length) return; _saveCurrentContent(); activeFileIndex = index; previewMode = false; refreshUI(); }
 
   function closeFile(index) {
     if (index < 0 || index >= openFiles.length) return;
@@ -102,7 +98,9 @@ const Editor = (() => {
   function _saveCurrentContent() {
     if (activeFileIndex < 0 || activeFileIndex >= openFiles.length || !cmView) return;
     const f = openFiles[activeFileIndex];
-    if (!f.isBinary) { const v = cmView.state.doc.toString(); if (v !== f.content) { f.content = v; f.modified = true; } }
+    // 仅将编辑器当前内容同步回 openFiles[i].content（切换回来时恢复用）
+    // modified 标记只由 CM6 updateListener 控制，不在此处设置
+    if (!f.isBinary) f.content = cmView.state.doc.toString();
   }
 
   // ================================================================
@@ -127,47 +125,19 @@ const Editor = (() => {
   }
 
   // ================================================================
-  // 自动换行（CSS 控制，Vite 会树摇掉 CM6 的 Facet 静态属性故不用）
-  // ================================================================
-
-  function toggleWordWrap() {
-    wordWrapEnabled = !wordWrapEnabled;
-    try { localStorage.setItem('lubina_word_wrap', String(wordWrapEnabled)); } catch (_) {}
-    _applyWordWrap();
-  }
-
-  function setWordWrap(on) {
-    if (wordWrapEnabled === on) return;
-    wordWrapEnabled = on;
-    try { localStorage.setItem('lubina_word_wrap', String(on)); } catch (_) {}
-    _applyWordWrap();
-  }
-
-  function _applyWordWrap() {
-    const w = document.getElementById('editorCmWrapper');
-    if (!w) return;
-    w.classList.toggle('cm-word-wrap', wordWrapEnabled);
-    // 直接设 DOM style，确保覆盖 CM6 内部的 white-space
-    const content = w.querySelector('.cm-content');
-    if (content) {
-      content.style.setProperty('white-space', wordWrapEnabled ? 'pre-wrap' : 'pre', 'important');
-      content.style.setProperty('word-break', wordWrapEnabled ? 'break-word' : 'normal');
-    }
-  }
-
-  // ================================================================
   // CM6 加载（npm → Vite node_modules 解析）
   // ================================================================
 
   let _cmCache = null;
   async function _loadCM6() {
     if (_cmCache) return _cmCache;
-    // codemirror 包只导出 basicSetup，EditorView/keymap 在 @codemirror/view
-    const [view, cm] = await Promise.all([
+    const [view, cm, lang, lezer] = await Promise.all([
       import('@codemirror/view'),
       import('codemirror'),
+      import('@codemirror/language'),
+      import('@lezer/highlight'),
     ]);
-    _cmCache = { ...view, basicSetup: cm.basicSetup };
+    _cmCache = { ...view, basicSetup: cm.basicSetup, syntaxHighlighting: lang.syntaxHighlighting, HighlightStyle: lang.HighlightStyle, tags: lezer.tags };
     return _cmCache;
   }
 
@@ -218,25 +188,123 @@ const Editor = (() => {
 
   async function _renderContent() {
     const w = document.getElementById('editorCmWrapper'), bin = document.getElementById('editorBinaryNotice'), binExt = document.getElementById('editorBinaryExt'), empty = document.getElementById('editorEmptyState');
+    const pw = document.getElementById('editorPreviewWrapper');
     if (cmView) { cmView.destroy(); cmView = null; }
-    if (activeFileIndex < 0 || openFiles.length === 0) { if (w) { w.classList.add('hidden'); w.innerHTML = ''; } if (bin) bin.classList.add('hidden'); if (empty) empty.classList.remove('hidden'); return; }
+    if (pw) pw.remove();
+    if (activeFileIndex < 0 || openFiles.length === 0) {
+      if (w) { w.classList.add('hidden'); w.innerHTML = ''; }
+      if (bin) bin.classList.add('hidden'); if (empty) empty.classList.remove('hidden');
+      _hideToolbar(); return;
+    }
     const f = openFiles[activeFileIndex];
-    if (f.isBinary) { if (w) { w.classList.add('hidden'); w.innerHTML = ''; } if (empty) empty.classList.add('hidden'); if (bin) { bin.classList.remove('hidden'); if (binExt) binExt.textContent = `文件类型: .${f.ext} (${f.name})`; } }
-    else { if (bin) bin.classList.add('hidden'); if (empty) empty.classList.add('hidden'); if (w) { w.classList.remove('hidden'); w.innerHTML = ''; await _mk(w, f); } }
+    if (f.isBinary) {
+      if (w) { w.classList.add('hidden'); w.innerHTML = ''; }
+      if (empty) empty.classList.add('hidden');
+      if (bin) { bin.classList.remove('hidden'); if (binExt) binExt.textContent = `文件类型: .${f.ext} (${f.name})`; }
+      _hideToolbar();
+    } else if (previewMode && (f.ext === 'md' || f.ext === 'html')) {
+      if (bin) bin.classList.add('hidden'); if (empty) empty.classList.add('hidden');
+      if (w) { w.classList.add('hidden'); w.innerHTML = ''; }
+      _renderPreview(f);
+      _showToolbar(true);  // 预览模式工具栏
+    } else {
+      if (bin) bin.classList.add('hidden'); if (empty) empty.classList.add('hidden');
+      if (w) { w.classList.remove('hidden'); w.innerHTML = ''; await _mk(w, f); }
+      _showToolbar(f.ext === 'md' || f.ext === 'html');  // 可预览文件显示工具栏
+    }
+  }
+
+  // ── 预览 ──
+
+  async function _renderPreview(file) {
+    const container = document.getElementById('editorContainer');
+    if (!container) return;
+    let pw = document.getElementById('editorPreviewWrapper');
+    if (!pw) {
+      pw = document.createElement('div');
+      pw.id = 'editorPreviewWrapper';
+      pw.className = 'editor-preview-wrapper';
+      container.appendChild(pw);
+    }
+    pw.innerHTML = '';
+
+    if (file.ext === 'md') {
+      try {
+        const marked = await import('marked');
+        const html = marked.marked ? marked.marked(file.content) : marked.parse(file.content);
+        const d = document.documentElement.getAttribute('data-theme') === 'dark';
+        pw.innerHTML = `<div class="markdown-body" style="padding:20px 28px;max-width:860px;margin:0 auto;color:${d?'#dcd9ed':'#3a3650'};line-height:1.75;font-size:0.92rem;">${html}</div>`;
+      } catch (e) {
+        pw.innerHTML = `<div class="editor-preview-error">Markdown 渲染失败: ${_esc(e.message)}</div>`;
+      }
+    } else if (file.ext === 'html') {
+      const iframe = document.createElement('iframe');
+      iframe.className = 'editor-html-preview';
+      iframe.sandbox = 'allow-scripts allow-same-origin';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;flex:1;';
+      pw.appendChild(iframe);
+      iframe.srcdoc = file.content;
+    }
+  }
+
+  let _toolbarEl = null;
+  function _showToolbar(showPreview) {
+    _hideToolbar();
+    if (!showPreview) return;
+    const tabs = document.getElementById('editorTabs');
+    if (!tabs) return;
+    _toolbarEl = document.createElement('div');
+    _toolbarEl.className = 'editor-preview-toolbar';
+    _toolbarEl.innerHTML = `<button class="btn btn-ghost btn-sm" id="btnPreviewToggle">${previewMode ? '编辑源码' : '预览'}</button>`;
+    tabs.parentNode.insertBefore(_toolbarEl, tabs.nextSibling);
+    _toolbarEl.querySelector('#btnPreviewToggle').onclick = () => togglePreview();
+  }
+  function _hideToolbar() {
+    if (_toolbarEl) { _toolbarEl.remove(); _toolbarEl = null; }
+  }
+
+  function togglePreview() {
+    if (activeFileIndex < 0) return;
+    const f = openFiles[activeFileIndex];
+    if (f.ext !== 'md' && f.ext !== 'html') return;
+    // 保存当前编辑内容
+    _saveCurrentContent();
+    previewMode = !previewMode;
+    _renderContent();
   }
 
   async function _mk(parent, file) {
     try {
-      const { EditorView, basicSetup, keymap } = await _loadCM6();
+      const { EditorView, basicSetup, keymap, syntaxHighlighting, HighlightStyle, tags } = await _loadCM6();
 
       const saveBinding = keymap.of([{ key: 'Mod-s', run: () => { saveFile(); return true; }, preventDefault: true }]);
 
-      let initial = true;
+      // 显式绑定 Ctrl+C 复制，解决 Tauri 2 webview 中某些情况下复制不生效的问题
+      const copyBinding = keymap.of([{
+        key: 'Mod-c',
+        run: (view) => {
+          const range = view.state.selection.main;
+          const text = view.state.sliceDoc(range.from, range.to);
+          if (text) {
+            navigator.clipboard.writeText(text).catch(() => {
+              const ta = document.createElement('textarea');
+              ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+              document.body.appendChild(ta); ta.select();
+              try { document.execCommand('copy'); } catch (_) {}
+              document.body.removeChild(ta);
+            });
+          }
+          return true;
+        }
+      }]);
 
-      const ext = [...[].concat(basicSetup), saveBinding,
+      // CM6 初始化阶段会触发多次 docChanged（语言扩展、缩进规范化等）
+      let _cmSettled = false;
+      setTimeout(() => { _cmSettled = true; }, 300);
+
+      const ext = [...[].concat(basicSetup), saveBinding, copyBinding,
         EditorView.updateListener.of(u => {
-          if (u.docChanged) {
-            if (initial) { initial = false; return; }
+          if (u.docChanged && _cmSettled) {
             if (activeFileIndex >= 0 && activeFileIndex < openFiles.length) {
               openFiles[activeFileIndex].modified = true;
               _renderTabs();
@@ -245,11 +313,37 @@ const Editor = (() => {
         }),
       ];
 
+      // ═══ 语法高亮：深色模式用中等亮度 + 高饱和度，拉开色相差异 ═══
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const hlStyle = HighlightStyle.define([
+        {tag:tags.keyword,                      color:isDark?'#7ea8d8':'#5c4e8a'},
+        {tag:tags.string,                       color:isDark?'#ce9878':'#3d7c47'},
+        {tag:tags.number,                       color:isDark?'#b5cea8':'#8a6a9e'},
+        {tag:tags.comment,                      color:isDark?'#6a6a78':'#9999a8', fontStyle:'italic'},
+        {tag:tags.variableName,                 color:isDark?'#d4d4d8':'#3a3650'},
+        {tag:tags.definition(tags.variableName),color:isDark?'#d4d4d8':'#4a4270'},
+        {tag:tags.function(tags.variableName),  color:isDark?'#dcd0a0':'#604888'},
+        {tag:tags.typeName,                     color:isDark?'#58b8a8':'#4e6088'},
+        {tag:tags.tagName,                      color:isDark?'#6ea0d0':'#5e7498'},
+        {tag:tags.attributeName,                color:isDark?'#9cd0f0':'#6e5898'},
+        {tag:tags.literal,                      color:isDark?'#7ea8d8':'#8a5e4e'},
+        {tag:tags.operator,                     color:isDark?'#b8b8c0':'#5a5580'},
+        {tag:tags.bracket,                      color:isDark?'#a0a0a8':'#6e6a88'},
+        {tag:tags.heading,                      color:isDark?'#d8c898':'#3a3650', fontWeight:'600'},
+        {tag:tags.quote,                        color:isDark?'#9898a8':'#7a768e'},
+        {tag:tags.link,                         color:isDark?'#6ea8d8':'#406888', textDecoration:'underline'},
+        {tag:tags.meta,                         color:isDark?'#a0a0a8':'#7a768e'},
+        {tag:tags.strong,                       color:isDark?'#d8c898':'#3a3650', fontWeight:'600'},
+        {tag:tags.emphasis,                     color:isDark?'#d4c8b0':'#3a3650', fontStyle:'italic'},
+        {tag:tags.monospace,                    color:isDark?'#a0b898':'#5a6848'},
+        {tag:tags.content,                      color:isDark?'#d0d0d4':'#3a3650'},
+      ]);
+      ext.push(syntaxHighlighting(hlStyle));
+
       const lang = await _lang(file.ext || ''); if (lang) ext.push(lang);
       ext.push(_theme(EditorView));
 
       cmView = new EditorView({ doc: file.content, extensions: ext, parent });
-      _applyWordWrap();
       _bindCtx(parent);
     } catch (e) {
       console.error('[Editor] CM6 失败:', e);
@@ -267,24 +361,43 @@ const Editor = (() => {
     up();
   }
 
-  function _theme(EditorView) { const d = document.documentElement.getAttribute('data-theme') === 'dark'; return EditorView.theme({
-    '&':{backgroundColor:d?'#1a1a24':'#fafafc',color:d?'#d4d2e0':'#3a3650',fontSize:'0.85rem',fontFamily:'"Cascadia Code","Fira Code","JetBrains Mono","SF Mono",Consolas,monospace',height:'100%'},
-    '.cm-gutters':{backgroundColor:d?'#1e1d28':'#f3f1fb',color:d?'#5a5580':'#a8a2c2',borderRight:d?'1px solid #2a2838':'1px solid #e6e3f2'},
-    '.cm-activeLineGutter':{backgroundColor:d?'#252435':'#ebe9f5',color:d?'#c0b3e6':'#5058A8'},
-    '.cm-activeLine':{backgroundColor:d?'rgba(80,88,168,0.06)':'rgba(80,88,168,0.04)'},
-    '.cm-cursor':{borderLeftColor:d?'#c0b3e6':'#5058A8'},
-    '.cm-selectionBackground':{backgroundColor:d?'rgba(80,88,168,0.22)':'rgba(80,88,168,0.14)'},
-  },{dark:d});}
+  function _theme(EditorView) { const d = document.documentElement.getAttribute('data-theme') === 'dark';
+    // 外壳样式：背景、行号区、光标、选中。语法高亮走 HighlightStyle.define()
+    return EditorView.theme({
+      '&':{
+        backgroundColor:d?'#1e1e2a':'#fafafc',
+        color:d?'#d0d0d4':'#3a3650',
+        fontSize:'0.96rem',
+        fontWeight:d?'480':'400',    // 深色模式稍粗，提升可读性
+        fontFamily:'"Cascadia Code","Fira Code","JetBrains Mono","SF Mono",Consolas,monospace',
+        height:'100%'
+      },
+      '.cm-gutters':{
+        backgroundColor:d?'#22222e':'#f3f1fb',
+        color:d?'#6a6a7a':'#a8a2c2',
+        borderRight:d?'1px solid #2e2e3a':'1px solid #e6e3f2'
+      },
+      '.cm-activeLineGutter':{backgroundColor:d?'#282836':'#ebe9f5',color:d?'#a0a0b0':'#5058A8'},
+      '.cm-activeLine':{backgroundColor:d?'rgba(255,255,255,0.04)':'rgba(80,88,168,0.04)'},
+      '.cm-cursor':{borderLeftColor:d?'#b0b0b8':'#5058A8'},
+      '.cm-selectionBackground':{backgroundColor:d?'rgba(120,140,200,0.30)':'rgba(80,88,168,0.14)'},
+      '.cm-line':{fontWeight:d?'480':'400'},              // 每行文字稍粗
+      '.cm-gutterElement':{fontWeight:d?'400':'400'},      // 行号不加粗
+    },{dark:d});}
 
   function _bindCtx(parent) { parent.addEventListener('contextmenu', e => { e.preventDefault(); _ctxMenu(e.clientX, e.clientY); }); }
 
   function _ctxMenu(x, y) {
     document.querySelectorAll('.context-menu.editor-menu').forEach(m => m.remove());
+    const f = activeFileIndex >= 0 ? openFiles[activeFileIndex] : null;
+    const canPreview = f && (f.ext === 'md' || f.ext === 'html');
     const m = document.createElement('div'); m.className = 'context-menu editor-menu visible'; m.style.left = x + 'px'; m.style.top = y + 'px';
-    m.innerHTML = `<div class="context-menu-item" data-a="wrap">${wordWrapEnabled?'自动换行：开':'自动换行：关'}</div><div class="context-menu-item" data-a="save">保存</div><div class="context-menu-separator"></div><div class="context-menu-item" data-a="close">关闭文件</div>`;
+    m.innerHTML = `<div class="context-menu-item" data-a="save">保存</div>`
+      + (canPreview ? `<div class="context-menu-item" data-a="preview">${previewMode ? '返回编辑' : '预览'}</div>` : '')
+      + `<div class="context-menu-separator"></div><div class="context-menu-item" data-a="close">关闭文件</div>`;
     document.body.appendChild(m);
-    m.querySelector('[data-a="wrap"]').onclick = () => { toggleWordWrap(); m.remove(); };
     m.querySelector('[data-a="save"]').onclick = () => { saveFile(); m.remove(); };
+    if (canPreview) m.querySelector('[data-a="preview"]').onclick = () => { togglePreview(); m.remove(); };
     m.querySelector('[data-a="close"]').onclick = () => { closeFile(activeFileIndex); m.remove(); };
     function h(e) { if (!m.parentNode) { document.removeEventListener('click', h, true); return; } if (!m.contains(e.target)) { m.remove(); document.removeEventListener('click', h, true); } }
     setTimeout(() => document.addEventListener('click', h, true), 0);
@@ -293,5 +406,5 @@ const Editor = (() => {
   function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
   function _toast(msg, type) { if (typeof App !== 'undefined' && App.showToast) App.showToast(msg, type); }
 
-  return { mount, destroy, openFile, openBinary, switchFile, closeFile, saveFile, toggleWordWrap, setWordWrap, refresh, refreshUI, getWordWrap: () => wordWrapEnabled, getOpenFiles: () => openFiles, getActiveFile: () => activeFileIndex >= 0 ? openFiles[activeFileIndex] : null };
+  return { mount, destroy, openFile, openBinary, switchFile, closeFile, saveFile, togglePreview, refresh, refreshUI, getOpenFiles: () => openFiles, getActiveFile: () => activeFileIndex >= 0 ? openFiles[activeFileIndex] : null };
 })();

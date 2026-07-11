@@ -5,7 +5,7 @@
 
 const App = (() => {
   const state = {
-    activePage: 'home', splitMode: null,
+    activePage: 'home',
     fileExplorerOpen: true, theme: 'auto', unreadCount: 0,
     rendered: false,  // 首次渲染标志
   };
@@ -72,10 +72,9 @@ const App = (() => {
 
   // ===== 页面 =====
   async function showPage(id) {
-    // 已经在目标页面（首次渲染除外），不做任何操作
-    if (state.rendered && id === state.activePage && !state.splitMode) return;
+    // 已经在目标页面，不做任何操作
+    if (state.rendered && id === state.activePage) return;
     if (id === 'home') { state.unreadCount = 0; }
-    if (state.splitMode) await closeSplit();
     const ok = await renderSingle(id);
     if (!ok) return;  // 用户取消了未保存弹窗
     state.activePage = id;
@@ -92,7 +91,6 @@ const App = (() => {
         try { await result; } catch (_) { return false; }  // 用户取消
       }
     }
-    state.splitMode = null;
     state.rendered = true;
     els.panelContainer.className = 'split-root single';
     els.panelContainer.innerHTML = `<div class="split-panel" data-page="${id}">${pageHTML(id)}</div>`;
@@ -145,26 +143,6 @@ const App = (() => {
     }, 50);
   }
 
-  // ===== 分屏 =====
-  async function splitPage(pageId, dir) {
-    if (state.splitMode) await closeSplit();
-    const result = unmountPage(state.activePage);
-    if (result instanceof Promise) {
-      try { await result; } catch (_) { return; }  // 用户取消
-    }
-    state.splitMode = { direction: dir, pages: [state.activePage, pageId] };
-    els.panelContainer.className = `split-root ${dir}`;
-    els.panelContainer.innerHTML = '';
-    [state.activePage, pageId].forEach((pid, i) => {
-      const p = document.createElement('div'); p.className = 'split-panel'; p.style.flex = '1 1 0'; p.dataset.page = pid;
-      p.innerHTML = pageHTML(pid); els.panelContainer.appendChild(p);
-      if (i === 0) { const h = document.createElement('div'); h.className = 'split-handle'; h.addEventListener('mousedown', startResize); els.panelContainer.appendChild(h); }
-    });
-    requestAnimationFrame(() => { mountPage(state.activePage); });
-  }
-
-  async function closeSplit() { state.splitMode = null; await renderSingle(state.activePage); }
-
   // ===== 拖拽 =====
   function bindShellHandles() {
     const h = document.getElementById('shellHandleFE'), fe = document.getElementById('fileExplorer');
@@ -190,19 +168,6 @@ const App = (() => {
         document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
       });
     }, 80);
-  }
-
-  function startResize(e) {
-    e.preventDefault(); const h = e.target, ct = els.panelContainer;
-    const isH = ct.classList.contains('horizontal');
-    const ps = ct.querySelectorAll('.split-panel'); if (ps.length < 2) return;
-    h.classList.add('dragging');
-    const sp = isH ? e.clientX : e.clientY;
-    const ss = Array.from(ps).map(p => isH ? p.offsetWidth : p.offsetHeight);
-    const t = ss.reduce((a, b) => a + b, 0);
-    function mv(ev) { const d = (isH ? ev.clientX : ev.clientY) - sp; const r = Math.max(0.12, Math.min(0.88, (ss[0] + d) / t)); ps[0].style.flex = `${r*100} 1 0`; ps[1].style.flex = `${(1-r)*100} 1 0`; }
-    function up() { h.classList.remove('dragging'); document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); }
-    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
   }
 
   // ===== 活动栏事件 =====
@@ -236,16 +201,11 @@ const App = (() => {
     const m = els.contextMenu;
     m.classList.remove('visible');
     m.innerHTML = `
-      <div class="context-menu-item" data-a="open">在此处打开</div>
-      <div class="context-menu-separator"></div>
-      <div class="context-menu-item" data-a="split-h">向右拆分</div>
-      <div class="context-menu-item" data-a="split-v">向下拆分</div>`;
+      <div class="context-menu-item" data-a="open">在此处打开</div>`;
     m.querySelectorAll('.context-menu-item').forEach(item => {
       item.onclick = () => {
         const a = item.dataset.a;
         if (a === 'open') showPage(pageId);
-        else if (a === 'split-h') splitPage(pageId, 'horizontal');
-        else if (a === 'split-v') splitPage(pageId, 'vertical');
         m.classList.remove('visible');
       };
     });
@@ -330,7 +290,6 @@ const App = (() => {
       if ((e.ctrlKey||e.metaKey) && e.key === 'b') { e.preventDefault(); toggleFileExplorer(); }
       if ((e.ctrlKey||e.metaKey) && e.key === 'k') { e.preventDefault(); const inp = document.getElementById('chatInput'); if (inp) inp.focus(); }
       if ((e.ctrlKey||e.metaKey) && e.key === 'n') { e.preventDefault(); if (typeof Chat!=='undefined'&&Chat.newConversation) Chat.newConversation(); }
-      if ((e.ctrlKey||e.metaKey) && e.key === 'w') { e.preventDefault(); if (state.splitMode) closeSplit(); }
     });
     window.addEventListener('resize', () => { if (typeof Editor!=='undefined'&&Editor.refresh) Editor.refresh(); });
   }
@@ -371,7 +330,7 @@ const App = (() => {
       case 'editor': return `
         <div class="page-container" id="editorPage">
           <div class="editor-tabs" id="editorTabs"></div>
-          <div class="editor-container">
+          <div class="editor-container" id="editorContainer">
             <div class="editor-cm-wrapper" id="editorCmWrapper"></div>
             <div class="editor-binary-notice hidden" id="editorBinaryNotice"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg><h3>不支持打开此类二进制文件</h3><p id="editorBinaryExt"></p></div>
             <div class="editor-empty-state" id="editorEmptyState"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg><h3>编辑器</h3><p>从左侧文件树打开一个文件<br>或拖拽文件到此处</p></div></div></div>`;
@@ -525,7 +484,7 @@ const App = (() => {
   }
 
   return {
-    init, showPage, splitPage, closeSplit, toggleFileExplorer, applyTheme, applyFontSize,
+    init, showPage, toggleFileExplorer, applyTheme, applyFontSize,
     addUnread, updateBadge, getState: () => state,
     isPathInWorkspace,
     toggleAvatarDropdown, showLoginModal, closeLoginModal, switchLoginMode, handleLogin, logout,

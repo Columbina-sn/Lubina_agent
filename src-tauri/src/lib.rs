@@ -71,6 +71,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![list_dir, read_file_content, write_file_content])
         .setup(|app| {
             // ═══════════════════════════════════════

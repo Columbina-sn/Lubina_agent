@@ -21,8 +21,8 @@
    ═══════════════════════════════════════════ */
 .tree-node {
   display: flex; align-items: center; gap: 5px;
-  padding: 4px 10px; padding-left: calc(8px + var(--depth, 0) * 16px);
-  font-size: 0.82rem; color: var(--text-body); cursor: pointer;
+  padding: 2px 10px; padding-left: calc(8px + var(--depth, 0) * 16px);
+  font-size: 0.84rem; color: var(--text-body); cursor: pointer;
   transition: all var(--transition-fast); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; border-left: 3px solid transparent;
 }
@@ -405,14 +405,68 @@
 .editor-cm-wrapper .cm-editor { height: 100%; }
 .editor-cm-wrapper .cm-scroller { overflow: auto; }
 
-/* CM6 自动换行（兼容 Facet 被树摇的情况，CSS 兜底） */
-.editor-cm-wrapper.cm-word-wrap .cm-content {
-  white-space: pre-wrap !important;
-  word-break: normal;
-  overflow-wrap: anywhere;
+/* ── 预览工具栏 ── */
+.editor-preview-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px; background: var(--bg-card);
+  border-bottom: 1px solid var(--border-card); flex-shrink: 0;
 }
-.editor-cm-wrapper.cm-word-wrap .cm-line {
-  white-space: pre-wrap !important;
+.editor-preview-toolbar .btn { font-size: 0.8rem; }
+
+/* ── Markdown / HTML 预览容器 ── */
+.editor-preview-wrapper {
+  flex: 1; min-height: 0; overflow-y: auto;
+  background: var(--editor-bg);
+}
+.editor-preview-error {
+  padding: 24px; text-align: center; color: var(--accent);
+  font-size: 0.88rem;
+}
+
+/* Markdown 渲染样式（补充 marked 默认输出） */
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin-top: 1.2em; margin-bottom: 0.5em; font-weight: 600;
+  line-height: 1.35;
+}
+.markdown-body h1 { font-size: 1.5rem; border-bottom: 1px solid var(--border-light); padding-bottom: 6px; }
+.markdown-body h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border-light); padding-bottom: 4px; }
+.markdown-body h3 { font-size: 1.1rem; }
+.markdown-body p { margin: 0.6em 0; }
+.markdown-body code {
+  background: var(--bg-input); padding: 2px 6px; border-radius: 4px;
+  font-family: "Cascadia Code","Fira Code","JetBrains Mono",monospace;
+  font-size: 0.85em;
+}
+.markdown-body pre {
+  background: var(--bg-input); border: 1px solid var(--border-light);
+  border-radius: var(--radius-md); padding: 12px 16px;
+  overflow-x: auto; font-size: 0.84rem; line-height: 1.6;
+}
+.markdown-body pre code { background: transparent; padding: 0; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--primary); padding-left: 12px;
+  color: var(--text-sub); margin: 0.8em 0;
+}
+.markdown-body ul, .markdown-body ol { padding-left: 1.5em; margin: 0.5em 0; }
+.markdown-body li { margin: 0.25em 0; }
+.markdown-body table {
+  border-collapse: collapse; width: 100%; margin: 0.8em 0;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--border-light); padding: 6px 12px;
+  text-align: left; font-size: 0.88rem;
+}
+.markdown-body th { background: var(--bg-input); font-weight: 600; }
+.markdown-body img { max-width: 100%; border-radius: var(--radius-sm); }
+.markdown-body a { color: var(--primary); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid var(--border-light); margin: 1.2em 0; }
+
+/* ── HTML 预览 iframe ── */
+.editor-html-preview {
+  width: 100%; height: 100%; border: none;
+  background: #fff;
 }
 
 /* 保留旧编辑器样式作为 CM6 降级时的后备 */
