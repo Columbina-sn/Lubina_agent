@@ -202,19 +202,29 @@ const knowledgeAPI = {
     return api.post('/knowledge/upload', formData);
   },
 
-  /** 基于知识库提问 */
-  ask: async (question, topK = 5) => {
-    return api.post('/knowledge/ask', { question, top_k: topK });
+  /** 列出知识条目（visible: 1=显式 0=隐藏） */
+  listItems: async (visible = 1) => {
+    return api.get(`/knowledge/items?visible=${visible}`);
   },
 
-  /** 列出已导入的文件 */
-  listFiles: async () => {
-    return api.get('/knowledge/files');
+  /** 获取单条详情 */
+  getItem: async (id) => {
+    return api.get(`/knowledge/items/${id}`);
   },
 
-  /** 删除知识库中的文件 */
-  deleteFile: async (fileName) => {
-    return api.del(`/knowledge/files/${encodeURIComponent(fileName)}`);
+  /** 编辑条目 */
+  updateItem: async (id, data) => {
+    return api.put(`/knowledge/items/${id}`, data);
+  },
+
+  /** 切换显隐 */
+  toggleItem: async (id) => {
+    return api.put(`/knowledge/items/${id}/toggle`);
+  },
+
+  /** 删除条目 */
+  deleteItem: async (id) => {
+    return api.del(`/knowledge/items/${id}`);
   },
 };
 

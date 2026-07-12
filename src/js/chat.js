@@ -624,6 +624,7 @@ const Chat = (() => {
     mount, destroy,
     sendMessage, stopGenerating,
     setMode, setModel,
+    get isGenerating() { return isGenerating; },
     switchTo: _switchConversation,
     deleteConversation,
     newConversation: () => {

@@ -106,6 +106,9 @@ const App = (() => {
     if (id === 'settings' && typeof Settings !== 'undefined') {
       return Settings.destroy();
     }
+    if (id === 'knowledge' && typeof Knowledge !== 'undefined') {
+      return Knowledge.destroy();
+    }
   }
 
   function _editorUnmountCheck() {
@@ -140,6 +143,7 @@ const App = (() => {
       if (id === 'home' && typeof Chat !== 'undefined') { Chat.mount(); bindChatSidebarHandle(); }
       if (id === 'editor' && typeof Editor !== 'undefined') Editor.mount();
       if (id === 'settings' && typeof Settings !== 'undefined') Settings.mount();
+      if (id === 'knowledge' && typeof Knowledge !== 'undefined') Knowledge.mount();
     }, 50);
   }
 
@@ -343,7 +347,7 @@ const App = (() => {
             ${panelHTML(1)}
           </div></div>`; }
       case 'exercises': return `<div class="page-container"><div class="placeholder-page"><h2>错题本</h2><p>拍照/截图/粘贴题目 → AI 解答 → 自动归类 → 定期复习</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
-      case 'knowledge': return `<div class="page-container"><div class="placeholder-page"><h2>知识库</h2><p>导入课件、笔记、论文，AI 基于你的资料回答问题</p><span class="placeholder-badge">P1 阶段开发</span></div></div>`;
+      case 'knowledge': return `<div class="page-container knowledge-page" id="knowledgePage"></div>`;
       case 'settings': return `
         <div class="page-container" id="settingsPage">
           <div class="settings-shell">
