@@ -199,32 +199,32 @@ const knowledgeAPI = {
   upload: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    return api.post('/knowledge/upload', formData);
+    return api.post('/api/knowledge/upload', formData);
   },
 
   /** 列出知识条目（visible: 1=显式 0=隐藏） */
   listItems: async (visible = 1) => {
-    return api.get(`/knowledge/items?visible=${visible}`);
+    return api.get(`/api/knowledge/items?visible=${visible}`);
   },
 
   /** 获取单条详情 */
   getItem: async (id) => {
-    return api.get(`/knowledge/items/${id}`);
+    return api.get(`/api/knowledge/items/${id}`);
   },
 
   /** 编辑条目 */
   updateItem: async (id, data) => {
-    return api.put(`/knowledge/items/${id}`, data);
+    return api.put(`/api/knowledge/items/${id}`, data);
   },
 
   /** 切换显隐 */
   toggleItem: async (id) => {
-    return api.put(`/knowledge/items/${id}/toggle`);
+    return api.put(`/api/knowledge/items/${id}/toggle`);
   },
 
   /** 删除条目 */
   deleteItem: async (id) => {
-    return api.del(`/knowledge/items/${id}`);
+    return api.del(`/api/knowledge/items/${id}`);
   },
 };
 

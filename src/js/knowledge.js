@@ -9,6 +9,7 @@ const Knowledge = (() => {
   let _view = 'visible';     // 'visible' | 'hidden'
   let _items = [];
   let _selectedId = null;   // 当前展开详情的条目 id
+  let _delegatedBound = false;  // 防止每次 _render 重复绑定事件
 
   // ================================================================
   // mount / destroy
@@ -24,6 +25,8 @@ const Knowledge = (() => {
   function destroy() {
     _items = [];
     _selectedId = null;
+    _delegatedBound = false;
+    _deleting = false;
   }
 
   // ================================================================
@@ -97,28 +100,36 @@ const Knowledge = (() => {
     }
   }
 
+  let _deleting = false;  // 防止重复弹删除确认窗
+
   async function _deleteItem(id) {
     if (_checkLocked()) return;
+    if (_deleting) return;  // 已有确认窗在显示中
     const item = _items.find(i => i.id === id);
     if (!item) return;
 
-    // 自定义确认弹窗
+    _deleting = true;
+
+    // 自定义确认弹窗（用 class 而非 id 避免重复 DOM 时冲突）
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
+    overlay.className = 'modal-overlay k-del-overlay';
     overlay.innerHTML = `
       <div class="modal-dialog" style="max-width:380px;">
         <h3>删除知识条目</h3>
         <p>确定要删除「${_esc(item.title || '未命名')}」吗？此操作不可撤销。</p>
         <div class="modal-actions">
-          <button class="btn btn-ghost" id="kDelCancel">取消</button>
-          <button class="btn btn-accent" id="kDelConfirm">确认删除</button>
+          <button class="btn btn-ghost k-del-cancel">取消</button>
+          <button class="btn btn-accent k-del-confirm">确认删除</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
 
-    overlay.querySelector('#kDelCancel').onclick = () => overlay.remove();
-    overlay.querySelector('#kDelConfirm').onclick = async () => {
+    const cleanup = () => { overlay.remove(); _deleting = false; };
+
+    overlay.querySelector('.k-del-cancel').onclick = cleanup;
+    overlay.querySelector('.k-del-confirm').onclick = async () => {
       overlay.remove();
+      _deleting = false;
       try {
         await knowledgeAPI.deleteItem(id);
         await _loadItems();
@@ -133,9 +144,9 @@ const Knowledge = (() => {
         }
       }
     };
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(); });
     document.addEventListener('keydown', function esc(e) {
-      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); }
+      if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', esc); }
     });
   }
 
@@ -264,6 +275,23 @@ const Knowledge = (() => {
     const el = document.getElementById('knowledgePage');
     if (!el) return;
 
+    // === 仅绑定一次：操作按钮的事件委托（隐藏/显示、删除、保存）===
+    if (!_delegatedBound) {
+      _delegatedBound = true;
+      el.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        e.stopPropagation();  // 阻止冒泡，防止重复触发
+        const action = btn.dataset.action;
+        const kid = btn.dataset.kid;
+
+        if (action === 'toggle') _toggleVisibility(kid);
+        if (action === 'delete') _deleteItem(kid);
+        if (action === 'save') _saveEdit(kid);
+      });
+    }
+
+    // === 每次 render 重新绑定：DOM 元素引用 ===
     // 上传按钮
     el.querySelector('#kUploadBtn')?.addEventListener('click', _upload);
 
@@ -288,18 +316,6 @@ const Knowledge = (() => {
         _selectedId = (_selectedId === kid) ? null : kid;
         _render();
       });
-    });
-
-    // 操作按钮（隐藏/显示、删除、保存）
-    el.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-action]');
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const kid = btn.dataset.kid;
-
-      if (action === 'toggle') _toggleVisibility(kid);
-      if (action === 'delete') _deleteItem(kid);
-      if (action === 'save') _saveEdit(kid);
     });
   }
 

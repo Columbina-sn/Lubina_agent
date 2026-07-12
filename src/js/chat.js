@@ -1,5 +1,5 @@
 /* ============================================================
-   chat.js v5 — 真实 AI 流式聊天
+   chat.js v6 — 对话级状态 + 错误恢复 + 消息队列
 
    模式切换：ask / plan / auto（当前均透传用户消息到 AI）
    模型切换：从已启用的供应商中选择模型
@@ -7,20 +7,22 @@
    流式回复统一用 info 气泡包裹渲染
    AI 消息使用 {info, action, warning, success, error, options} 类型
    连续 AI 消息不重复头像
+
+   v6 新特性：
+   - isGenerating / locked / abortController 移至每个对话自身
+   - 启动时检测孤儿 assistant 消息（崩溃/断网）→ 标为 error
+   - 生成期间可继续发消息 → 入队，回复完成后自动打包发送
    ============================================================ */
 
 const Chat = (() => {
   let conversations = [];
   let activeConversationId = null;
-  let isGenerating = false;
   let lastRole = null;
 
-  // 当前对话的模式和模型
+  // 当前对话的模式和模型（UI 选择状态，发送时同步到 conv）
   let chatMode = 'ask';
   let chatModelProviderId = null;   // provider_id
   let chatModelName = null;         // 具体的 model_name
-  let chatLocked = false;           // 发送消息后锁定
-  let abortController = null;
 
   function mount() {
     _loadFromStorage();
@@ -32,7 +34,12 @@ const Chat = (() => {
   }
 
   function destroy() {
-    if (abortController) { abortController.abort(); abortController = null; }
+    // Abort 所有正在生成的对话
+    conversations.forEach(c => {
+      if (c.abortController) { c.abortController.abort(); c.abortController = null; }
+      c.isGenerating = false;
+      c._queue = [];
+    });
     _saveToStorage();
     lastRole = null;
   }
@@ -87,7 +94,8 @@ const Chat = (() => {
   }
 
   function setMode(mode) {
-    if (chatLocked) return;
+    const conv = _getActiveConversation();
+    if (conv && conv.locked) return;
     chatMode = mode;
     document.querySelectorAll('.chat-mode-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.mode === mode);
@@ -95,7 +103,8 @@ const Chat = (() => {
   }
 
   function setModel(value) {
-    if (chatLocked) return;
+    const conv = _getActiveConversation();
+    if (conv && conv.locked) return;
     if (!value) return;
     const [pid, mname] = value.split('::');
     if (pid && mname) {
@@ -105,20 +114,24 @@ const Chat = (() => {
   }
 
   function _lock() {
-    chatLocked = true;
+    const conv = _getActiveConversation();
+    if (conv) conv.locked = true;
     _updateToolbarState();
   }
 
   function _unlock() {
-    chatLocked = false;
+    const conv = _getActiveConversation();
+    if (conv) conv.locked = false;
     _updateToolbarState();
   }
 
   function _updateToolbarState() {
+    const conv = _getActiveConversation();
+    const locked = conv ? conv.locked : false;
     const modeBtns = document.querySelectorAll('.chat-mode-btn');
     const select = document.getElementById('chatModelSelect');
-    modeBtns.forEach(b => { b.disabled = chatLocked; b.style.opacity = chatLocked ? '0.5' : ''; b.style.pointerEvents = chatLocked ? 'none' : ''; });
-    if (select) { select.disabled = chatLocked; select.style.opacity = chatLocked ? '0.5' : ''; select.style.pointerEvents = chatLocked ? 'none' : ''; }
+    modeBtns.forEach(b => { b.disabled = locked; b.style.opacity = locked ? '0.5' : ''; b.style.pointerEvents = locked ? 'none' : ''; });
+    if (select) { select.disabled = locked; select.style.opacity = locked ? '0.5' : ''; select.style.pointerEvents = locked ? 'none' : ''; }
   }
 
   // ===== 对话 CRUD =====
@@ -131,6 +144,11 @@ const Chat = (() => {
       providerId: chatModelProviderId || '',
       mode: chatMode,
       createdAt: new Date().toISOString(),
+      // v6：每个对话自身的状态
+      isGenerating: false,
+      locked: false,
+      abortController: null,
+      _queue: [],        // 排队消息（不持久化）
     };
     conversations.unshift(conv);
     _saveToStorage();
@@ -143,6 +161,8 @@ const Chat = (() => {
     if (!conv) return;
     const name = conv.title || '此对话';
     _showConfirmModal(`确定要删除「${name}」吗？`, '删除后无法恢复。', () => {
+      // Abort 正在生成的目标对话
+      if (conv.abortController) { conv.abortController.abort(); conv.abortController = null; }
       conversations = conversations.filter(c => c.id !== id);
       if (activeConversationId === id) activeConversationId = conversations[0]?.id || null;
       _saveToStorage(); _renderConversationList();
@@ -200,7 +220,10 @@ const Chat = (() => {
     if (conv.model) chatModelName = conv.model;
     // 如果该对话有用户消息，锁定
     const hasUserMsg = (conv.messages || []).some(m => m.role === 'user');
-    if (hasUserMsg) { _lock(); } else { _unlock(); }
+    if (hasUserMsg) { conv.locked = true; } else { conv.locked = false; }
+    _updateToolbarState();
+    // 恢复该对话的输入状态
+    _updateInputState(conv.isGenerating);
     // 恢复 UI
     setMode(chatMode);
     if (chatModelProviderId && chatModelName) {
@@ -215,10 +238,10 @@ const Chat = (() => {
     _scrollToBottom();
   }
 
-  // ===== 发送消息（真实 API）=====
+  // ===== 发送消息（v6：两路 —— 排队 / 正常发送）=====
 
   async function sendMessage(content) {
-    if (isGenerating || !content?.trim()) return;
+    if (!content?.trim()) return;
     const conv = _getActiveConversation();
     if (!conv) return;
 
@@ -237,48 +260,63 @@ const Chat = (() => {
       }
     }
 
-    // 所有检查通过，清空输入框（在这之前 sendMessage 可能因各种检查提前 return）
+    // 所有检查通过，清空输入框
     const inp = document.getElementById('chatInput');
     if (inp) { inp.value = ''; inp.style.height = 'auto'; }
 
-    // 锁定模式和模型
-    _lock();
+    // 锁定模式和模型（到当前对话）
     conv.mode = chatMode;
     conv.providerId = chatModelProviderId;
     conv.model = chatModelName;
+    conv.locked = true;
+    _updateToolbarState();
 
+    // ── 路径 A：对话正在生成 → 消息入队 ──
+    if (conv.isGenerating) {
+      conv._queue.push({ content: content.trim(), timestamp: Date.now() });
+      _appendQueuedMessage(content.trim());
+      _saveToStorage();
+      return;
+    }
+
+    // ── 路径 B：正常发送 ──
     // 添加用户消息
     conv.messages.push({ role: 'user', type: 'user', content: content.trim(), timestamp: Date.now() });
     if (conv.messages.filter(m => m.role === 'user').length === 1) {
       conv.title = content.trim().slice(0, 20) + (content.trim().length > 20 ? '…' : '');
     }
     _renderMessages(conv.messages); _renderConversationList(); _scrollToBottom();
-    isGenerating = true;
+    conv.isGenerating = true;
     _updateInputState(true);
 
     // 创建流式 AI 消息占位（info 类型气泡）
     const aiMsg = { role: 'assistant', type: 'info', content: '', timestamp: Date.now(), streaming: true, thinking: true, startTime: Date.now() };
     conv.messages.push(aiMsg);
 
-    // 构建消息历史（只发 role + content）
+    // 构建消息历史（只发 role + content，不含 streaming 中的消息）
     const apiMessages = conv.messages
       .filter(m => m.role === 'user' || (m.role === 'assistant' && !m.streaming && m.content))
       .map(m => ({ role: m.role, content: m.content }));
 
+    // 先渲染一次（用户气泡 + 空的 AI 占位气泡）
+    _renderMessages(conv.messages);
+    _scrollToBottom();
+
+    _doStreamSend(conv, apiMessages, aiMsg);
+  }
+
+  // ===== 核心流式发送逻辑（从 sendMessage 抽取，供 sendMessage 和 _flushQueue 复用）=====
+
+  async function _doStreamSend(conv, apiMessages, aiMsg) {
+    // 流式渲染节流：每 ~60ms 更新一次 DOM，避免每字闪烁
+    let throttleTimer = null;
+
     try {
-      // 先渲染一次（用户气泡 + 空的 AI 占位气泡）
-      _renderMessages(conv.messages);
-      _scrollToBottom();
-
-      // 流式渲染节流：每 ~60ms 更新一次 DOM，避免每字闪烁
-      let throttleTimer = null;
-      let pendingContent = '';
-
-      abortController = await _chatStream({
+      conv.abortController = await _chatStream({
         messages: apiMessages,
-        providerId: chatModelProviderId,
-        model: chatModelName,
-        mode: chatMode,
+        providerId: conv.providerId,
+        model: conv.model,
+        mode: conv.mode,
         onDelta: (delta) => {
           // 首个 token 到达：结束思考计时，记录耗时
           if (aiMsg.thinking) {
@@ -288,7 +326,6 @@ const Chat = (() => {
             _renderMessages(conv.messages);
           }
           aiMsg.content += delta;
-          pendingContent += delta;
 
           if (!throttleTimer) {
             throttleTimer = setTimeout(() => {
@@ -308,11 +345,12 @@ const Chat = (() => {
           if (!aiMsg.content) aiMsg.content = '（AI 未返回内容）';
           _updateLastBubble(aiMsg);
           _scrollToBottom();
-          isGenerating = false;
-          abortController = null;
+          conv.isGenerating = false;
+          conv.abortController = null;
           _updateInputState(false);
           _saveToStorage();
           _notifyIfAway();
+          _flushQueue(conv);
         },
         onError: (err) => {
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
@@ -321,41 +359,91 @@ const Chat = (() => {
           aiMsg.content = aiMsg.content || `错误：${err.message || '请求失败'}`;
           if (!aiMsg.content.startsWith('错误')) aiMsg.content = `错误：${aiMsg.content}`;
           aiMsg.streaming = false;
-          isGenerating = false;
-          abortController = null;
+          conv.isGenerating = false;
+          conv.abortController = null;
           _updateInputState(false);
           // 错误时做全量重建（因为类型变了）
           _renderMessages(conv.messages);
           _saveToStorage();
+          _flushQueue(conv);
         },
       });
     } catch (err) {
+      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
       aiMsg.thinking = false;
       aiMsg.type = 'error';
       aiMsg.content = `错误：${err.message || '请求失败'}`;
       aiMsg.streaming = false;
-      isGenerating = false;
-      abortController = null;
+      conv.isGenerating = false;
+      conv.abortController = null;
       _updateInputState(false);
       _renderMessages(conv.messages);
       _saveToStorage();
+      _flushQueue(conv);
     }
   }
 
+  // ===== 消息队列 =====
+
+  /** 在 UI 末尾追加排队气泡（仅视觉，不加入 conv.messages） */
+  function _appendQueuedMessage(content) {
+    const container = document.getElementById('messageContainer');
+    if (!container) return;
+    const row = document.createElement('div');
+    row.className = 'message-row user queued';
+    row.innerHTML = `<div class="msg-avatar user">你</div>
+      <div class="msg-bubble user-bubble">${_esc(content)}
+        <div class="queue-indicator">排队中…</div>
+      </div>`;
+    container.appendChild(row);
+    _scrollToBottom();
+  }
+
+  /** 消费排队消息：加入对话 → 统一发送 */
+  function _flushQueue(conv) {
+    if (!conv._queue || conv._queue.length === 0) return;
+
+    const queued = conv._queue.splice(0);
+
+    // 将排队消息正式加入对话
+    queued.forEach(q => {
+      conv.messages.push({ role: 'user', type: 'user', content: q.content, timestamp: q.timestamp });
+    });
+
+    // 重建整个消息列表（排队气泡 → 正式气泡）
+    _renderMessages(conv.messages);
+    _scrollToBottom();
+
+    // 构建完整上下文（含所有排队用户消息）
+    const aiMsg = { role: 'assistant', type: 'info', content: '', timestamp: Date.now(), streaming: true, thinking: true, startTime: Date.now() };
+    conv.messages.push(aiMsg);
+
+    const apiMessages = conv.messages
+      .filter(m => m.role === 'user' || (m.role === 'assistant' && !m.streaming && m.content))
+      .map(m => ({ role: m.role, content: m.content }));
+
+    conv.isGenerating = true;
+    _updateInputState(true);
+
+    _doStreamSend(conv, apiMessages, aiMsg);
+  }
+
+  // ===== 停止生成 =====
+
   function stopGenerating() {
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
-    }
-    isGenerating = false;
     const conv = _getActiveConversation();
-    if (conv) {
-      const last = conv.messages[conv.messages.length - 1];
-      if (last?.streaming) {
-        last.streaming = false;
-        last.thinking = false;
-        if (!last.content) last.content = '（已停止）';
-      }
+    if (!conv) return;
+    if (conv.abortController) {
+      conv.abortController.abort();
+      conv.abortController = null;
+    }
+    conv.isGenerating = false;
+    conv._queue = [];   // 清空排队消息
+    const last = conv.messages[conv.messages.length - 1];
+    if (last?.streaming) {
+      last.streaming = false;
+      last.thinking = false;
+      if (!last.content) last.content = '（已停止）';
     }
     _updateInputState(false);
     _renderMessages((conv && conv.messages) || []);
@@ -569,12 +657,14 @@ const Chat = (() => {
   }
 
   function _updateInputState(disabled) {
-    const sb = document.getElementById('sendBtn');
     const tb = document.getElementById('stopBtn');
     const inp = document.getElementById('chatInput');
-    if (sb) { sb.classList.toggle('hidden', disabled); sb.disabled = disabled; }
+    // 停止按钮：生成时显示，空闲时隐藏
     if (tb) { tb.classList.toggle('hidden', !disabled); tb.disabled = !disabled; }
-    if (inp) inp.disabled = disabled;
+    // 发送按钮和输入框始终可用（生成时也能补充消息或排队发送）
+    if (inp) inp.disabled = false;
+    const sb = document.getElementById('sendBtn');
+    if (sb) { sb.classList.remove('hidden'); sb.disabled = false; }
   }
 
   // ===== 辅助 =====
@@ -598,7 +688,21 @@ const Chat = (() => {
       const d = localStorage.getItem('lubina_conversations');
       if (d) {
         conversations = JSON.parse(d);
-        conversations.forEach(c => c.messages.forEach(m => m.streaming = false));
+        conversations.forEach(c => {
+          c.messages.forEach(m => { m.streaming = false; });
+          // v6：为旧数据补充缺失字段
+          if (c.isGenerating === undefined) c.isGenerating = false;
+          if (c.locked === undefined) c.locked = (c.messages || []).some(m => m.role === 'user');
+          c.abortController = null;
+          c._queue = [];
+          // v6：错误恢复 —— 空内容的 assistant 消息标为 error
+          c.messages.forEach(m => {
+            if (m.role === 'assistant' && !m.content?.trim()) {
+              m.type = 'error';
+              m.content = '消息发送失败，未获取到 AI 回复。请检查网络连接后重试。';
+            }
+          });
+        });
         if (conversations.length > 0) activeConversationId = conversations[0].id;
       }
     } catch (_) { conversations = []; }
@@ -624,7 +728,10 @@ const Chat = (() => {
     mount, destroy,
     sendMessage, stopGenerating,
     setMode, setModel,
-    get isGenerating() { return isGenerating; },
+    get isGenerating() {
+      const conv = _getActiveConversation();
+      return conv ? conv.isGenerating : false;
+    },
     switchTo: _switchConversation,
     deleteConversation,
     newConversation: () => {
