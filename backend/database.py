@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS user_config (
     value TEXT
 );
 
--- 知识库条目表（SQL + 向量双存储：此处存结构化信息，向量由 sqlite-vec 管理）
+-- 知识库条目表（旧版，已废弃，保留兼容）
 CREATE TABLE IF NOT EXISTS knowledge_items (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT '',
@@ -68,6 +68,19 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
     source_file TEXT DEFAULT '',
     is_visible INTEGER DEFAULT 1,
     chunk_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 结构化知识信息表（新版：AI 提取的去重信息条目）
+CREATE TABLE IF NOT EXISTS knowledge_infos (
+    id TEXT PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    keywords TEXT NOT NULL DEFAULT '',
+    source_file TEXT DEFAULT '',
+    content_hash TEXT DEFAULT '',
+    is_visible INTEGER DEFAULT 1,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -186,6 +199,8 @@ def _seed_providers(conn: sqlite3.Connection):
         ("default_provider", "p_deepseek"),
         ("max_turns", "15"),
         ("chat_mode", "ask"),
+        ("kb_model", ""),
+        ("kb_provider", ""),
     ]
     for key, value in defaults:
         conn.execute("INSERT OR IGNORE INTO user_config (key, value) VALUES (?, ?)", (key, value))

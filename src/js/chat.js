@@ -307,9 +307,33 @@ const Chat = (() => {
 
   // ===== 核心流式发送逻辑（从 sendMessage 抽取，供 sendMessage 和 _flushQueue 复用）=====
 
+  /** 工具操作的人类可读标签 */
+  function _toolLabel(tool, args, isResult) {
+    const labels = {
+      knowledge_grep: {
+        detail: `知识库检索: "${args?.query || ''}"`,
+        human: '检索知识库',
+        done: '知识库检索完成',
+      },
+      web_search: {
+        detail: `联网搜索: "${args?.query || ''}"`,
+        human: '搜索网络',
+        done: '搜索完成',
+      },
+      web_fetch: {
+        detail: `获取网页: ${args?.url || ''}`,
+        human: '获取网页内容',
+        done: '网页获取完成',
+      },
+    };
+    const l = labels[tool] || { detail: tool, human: `使用工具: ${tool}`, done: `工具完成: ${tool}` };
+    return { detail: l.detail, human: isResult ? l.done : l.human };
+  }
+
   async function _doStreamSend(conv, apiMessages, aiMsg) {
-    // 流式渲染节流：每 ~60ms 更新一次 DOM，避免每字闪烁
     let throttleTimer = null;
+    // 跟踪工具消息的索引偏移
+    const toolMsgOffset = 0;
 
     try {
       conv.abortController = await _chatStream({
@@ -318,11 +342,9 @@ const Chat = (() => {
         model: conv.model,
         mode: conv.mode,
         onDelta: (delta) => {
-          // 首个 token 到达：结束思考计时，记录耗时
           if (aiMsg.thinking) {
             aiMsg.thinking = false;
             aiMsg.thinkingTime = ((Date.now() - aiMsg.startTime) / 1000).toFixed(1);
-            // 全量重建以移除"思考中……"占位，显示思考耗时
             _renderMessages(conv.messages);
           }
           aiMsg.content += delta;
@@ -330,20 +352,73 @@ const Chat = (() => {
           if (!throttleTimer) {
             throttleTimer = setTimeout(() => {
               throttleTimer = null;
-              // 直接更新最后一个气泡的 markdown-body，不重建整个消息列表
               _updateLastBubble(aiMsg);
               _scrollToBottom();
             }, 60);
           }
         },
+        onToolStart: (event) => {
+          if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+          // 移除空的 AI 占位气泡（还没内容），工具链中不需要它
+          const idx = conv.messages.indexOf(aiMsg);
+          if (idx >= 0) conv.messages.splice(idx, 1);
+          // 插入工具调用气泡
+          const { detail, human } = _toolLabel(event.tool, event.args, false);
+          const toolMsg = {
+            role: 'assistant', type: 'tool_call',
+            tool: event.tool, toolDetail: detail,
+            toolHuman: human,
+            content: '', streaming: false,
+            timestamp: Date.now(),
+          };
+          conv.messages.push(toolMsg);
+          _renderMessages(conv.messages);
+          _scrollToBottom();
+        },
+        onToolResult: (event) => {
+          const { detail, human } = _toolLabel(event.tool, event.args, true);
+          const resultMsg = {
+            role: 'assistant', type: 'tool_result',
+            tool: event.tool, toolDetail: detail,
+            toolHuman: human,
+            toolResult: event.result || '',
+            content: '', streaming: false,
+            timestamp: Date.now(),
+          };
+          conv.messages.push(resultMsg);
+          // 创建新的 AI 占位气泡，准备接收下一段文本回复
+          aiMsg.content = '';
+          aiMsg.thinking = true;
+          aiMsg.thinkingTime = undefined;
+          aiMsg.streaming = true;
+          aiMsg.startTime = Date.now();
+          aiMsg.type = 'info';
+          conv.messages.push(aiMsg);
+          _renderMessages(conv.messages);
+          _scrollToBottom();
+        },
+        onToolError: (event) => {
+          conv.messages.push({
+            role: 'assistant', type: 'tool_call',
+            tool: event.tool || 'system',
+            toolDetail: event.error || '工具执行出错',
+            toolHuman: '工具执行出错',
+            content: '', streaming: false, timestamp: Date.now(),
+          });
+          _renderMessages(conv.messages);
+          _scrollToBottom();
+        },
         onDone: () => {
-          // 清除待处理的节流，立即渲染最终状态
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
           aiMsg.thinking = false;
           aiMsg.streaming = false;
-          // 无内容兜底
-          if (!aiMsg.content) aiMsg.content = '（AI 未返回内容）';
-          _updateLastBubble(aiMsg);
+          if (!aiMsg.content) {
+            // 空占位（可能被工具链消耗了）— 移除
+            const idx = conv.messages.indexOf(aiMsg);
+            if (idx >= 0) conv.messages.splice(idx, 1);
+          } else {
+            _updateLastBubble(aiMsg);
+          }
           _scrollToBottom();
           conv.isGenerating = false;
           conv.abortController = null;
@@ -362,7 +437,6 @@ const Chat = (() => {
           conv.isGenerating = false;
           conv.abortController = null;
           _updateInputState(false);
-          // 错误时做全量重建（因为类型变了）
           _renderMessages(conv.messages);
           _saveToStorage();
           _flushQueue(conv);
@@ -450,10 +524,10 @@ const Chat = (() => {
     _saveToStorage();
   }
 
-  // ===== 流式 API 调用（前端直连后端 /api/chat/completions）=====
+  // ===== 流式 API 调用（Re-Act 模式，支持工具事件）=====
 
   async function _chatStream(options) {
-    const { messages, providerId, model, mode, onDelta, onDone, onError } = options;
+    const { messages, providerId, model, mode, onDelta, onDone, onError, onToolStart, onToolResult, onToolError } = options;
     const controller = new AbortController();
 
     try {
@@ -493,13 +567,30 @@ const Chat = (() => {
           if (data === '[DONE]') { onDone(); return controller; }
           try {
             const json = JSON.parse(data);
-            // 检查是否是错误消息
-            if (json.error) {
+
+            // ── Re-Act 事件分发（必须在 error 检查之前）──
+            if (json.type === 'tool_start') {
+              if (onToolStart) onToolStart(json);
+            } else if (json.type === 'tool_result') {
+              if (onToolResult) onToolResult(json);
+            } else if (json.type === 'tool_error') {
+              if (onToolError) onToolError(json);
+            } else if (json.type === 'delta') {
+              const delta = json.content;
+              if (delta) onDelta(delta);
+            } else if (json.type === 'thinking') {
+              // thinking 状态，前端 placeholder 已处理
+            } else if (json.type === 'done') {
+              onDone(); return controller;
+            } else if (json.error) {
+              // 非 Re-Act 事件的错误消息
               onError(new Error(json.message || 'API 返回错误'));
               return controller;
+            } else {
+              // ── 兼容旧 OpenAI 格式 ──
+              const delta = json.choices?.[0]?.delta?.content;
+              if (delta) onDelta(delta);
             }
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) onDelta(delta);
           } catch (_) { /* 忽略解析失败的行 */ }
         }
       }
@@ -555,6 +646,8 @@ const Chat = (() => {
       success: { label: '操作完成', cls: 'ai-success' },
       error: { label: '请求失败', cls: 'ai-error' },
       options: { label: '请选择一个选项', cls: 'ai-option' },
+      tool_call: { label: '', cls: 'ai-tool-call' },
+      tool_result: { label: '', cls: 'ai-tool-result' },
     };
     const tl = typeLabels[type] || typeLabels.info;
     let extra = '';
@@ -590,6 +683,21 @@ const Chat = (() => {
     if (type === 'options' && msg.options) {
       const btns = msg.options.map(o => `<button class="option-btn" onclick="Chat.selectOption('${_escAttr(o.value)}')">${_esc(o.label)}</button>`).join('');
       extra += `<div class="option-buttons">${btns}</div>`;
+    }
+
+    // 工具调用气泡
+    if (type === 'tool_call') {
+      return `<div class="msg-bubble ai-bubble ai-tool-call">
+        <div class="tool-call-detail">${_esc(msg.toolDetail || '')}</div>
+        <div class="tool-call-human">${_esc(msg.toolHuman || '')}</div>
+        ${msg.streaming ? '<div class="thinking-state" style="margin-top:4px;">执行中…</div>' : ''}
+      </div>`;
+    }
+    if (type === 'tool_result') {
+      return `<div class="msg-bubble ai-bubble ai-tool-result">
+        <div class="tool-call-detail">${_esc(msg.toolDetail || '')}</div>
+        <div class="tool-result-human">${_esc(msg.toolHuman || '')}</div>
+      </div>`;
     }
 
     return `<div class="msg-bubble ai-bubble ${tl.cls}">${extra}<div class="markdown-body">${mdContent}</div></div>`;
@@ -697,7 +805,8 @@ const Chat = (() => {
           c._queue = [];
           // v6：错误恢复 —— 空内容的 assistant 消息标为 error
           c.messages.forEach(m => {
-            if (m.role === 'assistant' && !m.content?.trim()) {
+            // 工具调用气泡无文本内容是正常的，不标为 error
+            if (m.role === 'assistant' && !m.content?.trim() && m.type !== 'tool_call' && m.type !== 'tool_result') {
               m.type = 'error';
               m.content = '消息发送失败，未获取到 AI 回复。请检查网络连接后重试。';
             }
@@ -714,7 +823,12 @@ const Chat = (() => {
         return {
           id: c.id, title: c.title, model: c.model, providerId: c.providerId, mode: c.mode, createdAt: c.createdAt,
           messages: c.messages.map(function (m) {
-            return { role: m.role, type: m.type, content: m.content, timestamp: m.timestamp, action: m.action, options: m.options, streaming: false };
+            return {
+              role: m.role, type: m.type, content: m.content, timestamp: m.timestamp,
+              action: m.action, options: m.options, streaming: false,
+              // 工具调用气泡字段
+              tool: m.tool, toolDetail: m.toolDetail, toolHuman: m.toolHuman, toolResult: m.toolResult,
+            };
           })
         };
       });

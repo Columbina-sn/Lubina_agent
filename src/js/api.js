@@ -195,11 +195,18 @@ async function healthCheck() {
 // ===== 知识库 API =====
 
 const knowledgeAPI = {
-  /** 上传文件到知识库 */
+  /** 上传文件到知识库（旧版，直接存储） */
   upload: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
     return api.post('/api/knowledge/upload', formData);
+  },
+
+  /** AI 提取上传（新版，文件 → AI 提取 → 去重 → 存储） */
+  aiUpload: async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/api/knowledge/ai-upload', formData);
   },
 
   /** 列出知识条目（visible: 1=显式 0=隐藏） */
@@ -207,9 +214,19 @@ const knowledgeAPI = {
     return api.get(`/api/knowledge/items?visible=${visible}`);
   },
 
+  /** 列出结构化信息条目 */
+  listInfos: async (visible = 1) => {
+    return api.get(`/api/knowledge/infos?visible=${visible}`);
+  },
+
   /** 获取单条详情 */
   getItem: async (id) => {
     return api.get(`/api/knowledge/items/${id}`);
+  },
+
+  /** 获取单条结构化信息 */
+  getInfo: async (id) => {
+    return api.get(`/api/knowledge/infos/${id}`);
   },
 
   /** 编辑条目 */
@@ -217,14 +234,34 @@ const knowledgeAPI = {
     return api.put(`/api/knowledge/items/${id}`, data);
   },
 
+  /** 编辑结构化信息 */
+  updateInfo: async (id, data) => {
+    return api.put(`/api/knowledge/infos/${id}`, data);
+  },
+
   /** 切换显隐 */
   toggleItem: async (id) => {
     return api.put(`/api/knowledge/items/${id}/toggle`);
   },
 
+  /** 切换结构化信息显隐 */
+  toggleInfo: async (id) => {
+    return api.put(`/api/knowledge/infos/${id}/toggle`);
+  },
+
   /** 删除条目 */
   deleteItem: async (id) => {
     return api.del(`/api/knowledge/items/${id}`);
+  },
+
+  /** 删除结构化信息 */
+  deleteInfo: async (id) => {
+    return api.del(`/api/knowledge/infos/${id}`);
+  },
+
+  /** 搜索知识库 */
+  searchInfos: async (query) => {
+    return api.get(`/api/knowledge/infos/search?q=${encodeURIComponent(query)}`);
   },
 };
 
@@ -233,16 +270,16 @@ const knowledgeAPI = {
 const configAPI = {
   /** 读取单个配置 */
   get: async (key) => {
-    return api.get(`/config/${key}`);
+    return api.get(`/api/config/${key}`);
   },
 
   /** 写入配置 */
   set: async (key, value) => {
-    return api.put(`/config/${key}`, { value });
+    return api.put(`/api/config/${key}`, { value });
   },
 
   /** 读取所有配置 */
   getAll: async () => {
-    return api.get('/config');
+    return api.get('/api/config');
   },
 };

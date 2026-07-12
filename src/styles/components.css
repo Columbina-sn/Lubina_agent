@@ -168,27 +168,29 @@
 /* 消息体 */
 .msg-body { min-width: 0; }
 
-/* ── 用户气泡（精确：参考设计 .message-row.user .bubble = btn-primary）── */
+/* ── 用户气泡 ── */
 .msg-bubble.user-bubble {
   padding: 9px 14px; border-radius: 14px 14px 4px 14px;
   background: var(--primary-gradient);
   border: 1px solid transparent;
   color: #fff; font-size: 0.86rem; line-height: 1.6;
-  word-break: break-word;
-  overflow-wrap: break-word;
+  word-break: break-word; overflow-wrap: break-word;
+  user-select: text;
 }
 [data-theme="dark"] .msg-bubble.user-bubble {
   background: linear-gradient(135deg, #6b5c9e 0%, #5c6ea8 100%);
   color: #fff;
 }
 
-/* ── AI 气泡（精确：参考设计 6 种气泡渐变 + 边框）── */
+/* ── AI 气泡 ── */
 .msg-bubble.ai-bubble {
   padding: 9px 14px; border-radius: 4px 14px 14px 14px;
   border: 1px solid;
   font-size: 0.86rem; line-height: 1.6; word-break: break-word;
   color: var(--text-h1);
+  user-select: text;
 }
+.markdown-body { user-select: text; }
 
 /* info = bubble-normal */
 .msg-bubble.ai-info {
@@ -934,4 +936,77 @@ select.input {
 .knowledge-empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 40px 20px; gap: 6px; color: var(--text-tip); font-size: 0.84rem;
+}
+
+/* ── 类别标签 ── */
+.category-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border-radius: 10px;
+  font-size: 0.7rem; font-weight: 500;
+  margin-bottom: 4px;
+}
+
+/* ── 内容文本 ── */
+.knowledge-card-content {
+  font-size: 0.84rem; color: var(--text-body);
+  margin-bottom: 4px; line-height: 1.5;
+}
+
+/* ── 关键词标签 ── */
+.keyword-tags {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+
+.keyword-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--secondary-light);
+  color: var(--text-sub);
+  border-radius: 8px;
+  font-size: 0.68rem;
+}
+
+/* ── 上传进度 ── */
+.knowledge-upload-progress {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px; margin: 0 16px 8px;
+  border: 1px solid var(--info-light, rgba(54,120,208,0.2));
+  border-radius: var(--radius-md);
+  background: rgba(54,120,208,0.05);
+  font-size: 0.82rem; color: var(--info);
+}
+
+/* ═══════════════════════════════════════════
+   19. 工具调用气泡（Re-Act 循环）
+   ═══════════════════════════════════════════ */
+
+.msg-bubble.ai-tool-call {
+  background: rgba(107, 82, 223, 0.06);
+  border: 1px solid rgba(107, 82, 223, 0.15);
+  font-size: 0.8rem; padding: 6px 12px;
+  border-radius: 4px 14px 14px 14px;
+}
+
+.msg-bubble.ai-tool-result {
+  background: rgba(61, 165, 93, 0.05);
+  border: 1px solid rgba(61, 165, 93, 0.12);
+  font-size: 0.8rem; padding: 6px 12px;
+  border-radius: 4px 14px 14px 14px;
+}
+
+.tool-call-detail {
+  font-family: "Cascadia Code","Fira Code","JetBrains Mono",monospace;
+  font-size: 0.68rem; color: var(--text-tip);
+  margin-bottom: 2px; word-break: break-all;
+}
+
+.tool-call-human {
+  font-size: 0.8rem; color: var(--text-sub);
+}
+
+.tool-result-human {
+  font-size: 0.8rem; color: var(--color-success);
 }

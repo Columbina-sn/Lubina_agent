@@ -1,23 +1,28 @@
 /* ============================================================
-   knowledge.js — 知识库 v1
+   knowledge.js v2 — 知识库（结构化信息条目 + AI 提取）
 
-   双视图：显式知识（AI 可读）/ 隐藏知识（仅存储）
-   上传文本文件 · 条目卡片列表 · 详情编辑 · AI 工作时锁定
+   新版使用 knowledge_infos 表（category / content / keywords）
+   上传时调 AI 提取结构化信息，两层去重后存储
+   双视图：显式知识 / 隐藏知识
+   AI 工作时锁定所有操作
    ============================================================ */
 
 const Knowledge = (() => {
   let _view = 'visible';     // 'visible' | 'hidden'
   let _items = [];
-  let _selectedId = null;   // 当前展开详情的条目 id
-  let _delegatedBound = false;  // 防止每次 _render 重复绑定事件
+  let _selectedId = null;
+  let _delegatedBound = false;
+  let _deleting = false;
+  let _uploading = false;   // AI 提取进行中
 
-  // ================================================================
-  // mount / destroy
-  // ================================================================
+  // ===== mount / destroy =====
 
   async function mount() {
     _view = 'visible';
     _selectedId = null;
+    _delegatedBound = false;
+    _deleting = false;
+    _uploading = false;
     await _loadItems();
     _render();
   }
@@ -27,16 +32,15 @@ const Knowledge = (() => {
     _selectedId = null;
     _delegatedBound = false;
     _deleting = false;
+    _uploading = false;
   }
 
-  // ================================================================
-  // 数据加载
-  // ================================================================
+  // ===== 数据加载 =====
 
   async function _loadItems() {
     try {
       const visible = _view === 'visible' ? 1 : 0;
-      _items = await knowledgeAPI.listItems(visible);
+      _items = await knowledgeAPI.listInfos(visible);
     } catch (e) {
       console.error('[Knowledge] 加载失败:', e);
       _items = [];
@@ -46,50 +50,65 @@ const Knowledge = (() => {
     }
   }
 
-  // ================================================================
-  // 操作（含 AI 工作锁定检查）
-  // ================================================================
+  // ===== 锁定检查 =====
 
   function _checkLocked() {
     if (typeof Chat !== 'undefined' && Chat.isGenerating) {
       if (typeof App !== 'undefined' && App.showToast) {
-        App.showToast('Lubina 工作时可能频繁读写知识库，不要随意操作哦', 'warning');
+        App.showToast('Lubina 工作时可能频繁读写知识库，禁止随意操作哦', 'warning');
+      }
+      return true;
+    }
+    if (_uploading) {
+      if (typeof App !== 'undefined' && App.showToast) {
+        App.showToast('AI 正在提取信息中，请稍候再操作', 'warning');
       }
       return true;
     }
     return false;
   }
 
-  async function _upload() {
+  // ===== AI 上传 =====
+
+  async function _aiUpload() {
     if (_checkLocked()) return;
 
-    // 创建隐藏的 file input
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.txt,.md,.py,.js,.ts,.html,.css,.json,.yaml,.yml,.xml,.csv,.log,.sh,.bat,.ini,.cfg,.conf,.toml,.rst,.tex';
     input.onchange = async () => {
       const file = input.files[0];
       if (!file) return;
+
+      _uploading = true;
+      _render();  // 显示进度
+
       try {
-        await knowledgeAPI.upload(file);
+        const result = await knowledgeAPI.aiUpload(file);
+        _uploading = false;
         await _loadItems();
         _render();
+        const msg = `AI 提取完成：新增 ${result.stored_count} 条，合并 ${result.merged_count} 条，跳过 ${result.skipped_count} 条`;
         if (typeof App !== 'undefined' && App.showToast) {
-          App.showToast('已导入: ' + file.name, 'success');
+          App.showToast(msg, 'success');
         }
       } catch (e) {
+        _uploading = false;
+        _render();
         if (typeof App !== 'undefined' && App.showToast) {
-          App.showToast('上传失败: ' + (e.message || '网络错误'), 'error');
+          App.showToast('AI 提取失败: ' + (e.message || '网络错误'), 'error');
         }
       }
     };
     input.click();
   }
 
+  // ===== 操作 =====
+
   async function _toggleVisibility(id) {
     if (_checkLocked()) return;
     try {
-      await knowledgeAPI.toggleItem(id);
+      await knowledgeAPI.toggleInfo(id);
       await _loadItems();
       _selectedId = null;
       _render();
@@ -100,23 +119,21 @@ const Knowledge = (() => {
     }
   }
 
-  let _deleting = false;  // 防止重复弹删除确认窗
-
-  async function _deleteItem(id) {
+  async function _deleteInfo(id) {
     if (_checkLocked()) return;
-    if (_deleting) return;  // 已有确认窗在显示中
+    if (_deleting) return;
     const item = _items.find(i => i.id === id);
     if (!item) return;
 
     _deleting = true;
 
-    // 自定义确认弹窗（用 class 而非 id 避免重复 DOM 时冲突）
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay k-del-overlay';
     overlay.innerHTML = `
       <div class="modal-dialog" style="max-width:380px;">
         <h3>删除知识条目</h3>
-        <p>确定要删除「${_esc(item.title || '未命名')}」吗？此操作不可撤销。</p>
+        <p>确定要删除此信息吗？此操作不可撤销。</p>
+        <p style="font-size:0.82rem;color:var(--text-tip);">${_esc(item.content || '空内容').slice(0, 80)}</p>
         <div class="modal-actions">
           <button class="btn btn-ghost k-del-cancel">取消</button>
           <button class="btn btn-accent k-del-confirm">确认删除</button>
@@ -131,7 +148,7 @@ const Knowledge = (() => {
       overlay.remove();
       _deleting = false;
       try {
-        await knowledgeAPI.deleteItem(id);
+        await knowledgeAPI.deleteInfo(id);
         await _loadItems();
         _selectedId = null;
         _render();
@@ -152,14 +169,20 @@ const Knowledge = (() => {
 
   async function _saveEdit(id) {
     if (_checkLocked()) return;
-    const titleEl = document.getElementById(`kTitle_${id}`);
+    const categoryEl = document.getElementById(`kCat_${id}`);
     const contentEl = document.getElementById(`kContent_${id}`);
-    if (!titleEl || !contentEl) return;
+    const keywordsEl = document.getElementById(`kKw_${id}`);
+    if (!contentEl) return;
     try {
-      await knowledgeAPI.updateItem(id, {
-        title: titleEl.value.trim(),
+      const data = {
         content: contentEl.value,
-      });
+      };
+      if (categoryEl) data.category = categoryEl.value.trim();
+      if (keywordsEl) {
+        const kw = keywordsEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        data.keywords = kw;
+      }
+      await knowledgeAPI.updateInfo(id, data);
       await _loadItems();
       if (typeof App !== 'undefined' && App.showToast) {
         App.showToast('已保存', 'success');
@@ -171,9 +194,7 @@ const Knowledge = (() => {
     }
   }
 
-  // ================================================================
-  // 渲染
-  // ================================================================
+  // ===== 渲染 =====
 
   function _render() {
     const el = document.getElementById('knowledgePage');
@@ -181,17 +202,17 @@ const Knowledge = (() => {
     el.innerHTML = `
       ${_renderToolbar()}
       ${_renderHeader()}
-      ${_renderList()}
-      ${_renderDetail()}`;
+      ${_uploading ? _renderUploadProgress() : ''}
+      ${_renderList()}`;
     _bindEvents();
   }
 
   function _renderToolbar() {
     return `
       <div class="knowledge-toolbar">
-        <button class="btn btn-primary btn-sm" id="kUploadBtn">
+        <button class="btn btn-primary btn-sm" id="kUploadBtn" ${_uploading ? 'disabled' : ''}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
-          导入文本
+          ${_uploading ? 'AI 提取中…' : 'AI 导入'}
         </button>
         <div class="knowledge-tabs">
           <button class="knowledge-tab ${_view === 'visible' ? 'active' : ''}" data-view="visible">显式知识</button>
@@ -200,16 +221,23 @@ const Knowledge = (() => {
       </div>`;
   }
 
+  function _renderUploadProgress() {
+    return `<div class="knowledge-upload-progress">
+      <div class="thinking-state" style="margin:0 8px 0 0;"></div>
+      <span>正在调用 AI 提取信息，请稍候…</span>
+    </div>`;
+  }
+
   function _renderHeader() {
     const label = _view === 'visible' ? '显式知识 · AI 可以检索和引用' : '隐藏知识 · 仅存储，AI 不会看到';
-    return `<div class="knowledge-view-hint">${label} &middot; ${_items.length} 条</div>`;
+    return `<div class="knowledge-view-hint">${label} · ${_items.length} 条</div>`;
   }
 
   function _renderList() {
     if (_items.length === 0) {
       return `<div class="knowledge-empty">
         <p>${_view === 'visible' ? '还没有显式知识条目' : '没有隐藏条目'}</p>
-        <span style="font-size:0.78rem;color:var(--text-tip);">上传文本文件或从显式知识中移入条目</span>
+        <span style="font-size:0.78rem;color:var(--text-tip);">上传文本文件，AI 将自动提取结构化信息</span>
       </div>`;
     }
 
@@ -218,20 +246,20 @@ const Knowledge = (() => {
   }
 
   function _renderCard(item) {
-    const preview = (item.content || '').replace(/\n/g, ' ').slice(0, 120);
-    const dateStr = (item.updated_at || item.created_at || '').slice(0, 10);
     const isExpanded = _selectedId === item.id;
+    const kw = item.keywords || [];
 
     return `
       <div class="knowledge-card ${isExpanded ? 'expanded' : ''}" id="kCard_${item.id}">
         <div class="knowledge-card-main" data-kid="${item.id}">
           <div class="knowledge-card-info">
-            <div class="knowledge-card-title">${_esc(item.title || '未命名')}</div>
+            ${item.category ? `<span class="category-tag">${_esc(item.category)}</span>` : ''}
+            <div class="knowledge-card-content">${_esc((item.content || '').slice(0, 150))}${(item.content || '').length > 150 ? '…' : ''}</div>
             <div class="knowledge-card-meta">
-              ${item.source_file ? `<span class="knowledge-card-source">${_esc(item.source_file)}</span>` : ''}
-              <span class="knowledge-card-date">${dateStr}</span>
+              ${item.source_file ? `<span class="knowledge-card-source">来自: ${_esc(item.source_file)}</span>` : ''}
+              <span class="knowledge-card-date">${(item.updated_at || item.created_at || '').slice(0, 10)}</span>
             </div>
-            <div class="knowledge-card-preview">${_esc(preview) || '(空内容)'}</div>
+            ${kw.length > 0 ? `<div class="keyword-tags">${kw.map(k => `<span class="keyword-chip">${_esc(k)}</span>`).join('')}</div>` : ''}
           </div>
           <div class="knowledge-card-actions">
             <button class="btn btn-ghost btn-sm" data-action="toggle" data-kid="${item.id}" title="${_view === 'visible' ? '移入隐藏' : '移入显式'}">
@@ -245,15 +273,20 @@ const Knowledge = (() => {
   }
 
   function _renderDetailPanel(item) {
+    const kw = (item.keywords || []).join(', ');
     return `
       <div class="knowledge-detail">
         <div class="form-group">
-          <label>标题</label>
-          <input class="input" id="kTitle_${item.id}" value="${_escAttr(item.title || '')}" placeholder="输入标题…">
+          <label>信息类别</label>
+          <input class="input" id="kCat_${item.id}" value="${_escAttr(item.category || '')}" placeholder="如：个人信息、学习资料…">
         </div>
         <div class="form-group">
-          <label>内容</label>
-          <textarea class="input knowledge-detail-textarea" id="kContent_${item.id}" rows="10" placeholder="输入内容…">${_esc(item.content || '')}</textarea>
+          <label>信息内容</label>
+          <textarea class="input knowledge-detail-textarea" id="kContent_${item.id}" rows="6" placeholder="输入内容…">${_esc(item.content || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label>关键词（逗号分隔）</label>
+          <input class="input" id="kKw_${item.id}" value="${_escAttr(kw)}" placeholder="关键词1, 关键词2">
         </div>
         ${item.source_file ? `<div class="form-group"><label>来源文件</label><p style="font-size:0.8rem;color:var(--text-tip);margin:0;">${_esc(item.source_file)}</p></div>` : ''}
         <div class="form-actions">
@@ -262,40 +295,29 @@ const Knowledge = (() => {
       </div>`;
   }
 
-  function _renderDetail() {
-    // 详情在卡片内渲染，此处为空
-    return '';
-  }
-
-  // ================================================================
-  // 事件绑定
-  // ================================================================
+  // ===== 事件绑定 =====
 
   function _bindEvents() {
     const el = document.getElementById('knowledgePage');
     if (!el) return;
 
-    // === 仅绑定一次：操作按钮的事件委托（隐藏/显示、删除、保存）===
     if (!_delegatedBound) {
       _delegatedBound = true;
       el.addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-action]');
         if (!btn) return;
-        e.stopPropagation();  // 阻止冒泡，防止重复触发
+        e.stopPropagation();
         const action = btn.dataset.action;
         const kid = btn.dataset.kid;
 
         if (action === 'toggle') _toggleVisibility(kid);
-        if (action === 'delete') _deleteItem(kid);
+        if (action === 'delete') _deleteInfo(kid);
         if (action === 'save') _saveEdit(kid);
       });
     }
 
-    // === 每次 render 重新绑定：DOM 元素引用 ===
-    // 上传按钮
-    el.querySelector('#kUploadBtn')?.addEventListener('click', _upload);
+    el.querySelector('#kUploadBtn')?.addEventListener('click', _aiUpload);
 
-    // 视图切换标签
     el.querySelectorAll('.knowledge-tab').forEach(btn => {
       btn.addEventListener('click', async () => {
         const v = btn.dataset.view;
@@ -307,10 +329,8 @@ const Knowledge = (() => {
       });
     });
 
-    // 卡片点击（展开/收起详情）
     el.querySelectorAll('.knowledge-card-main').forEach(row => {
       row.addEventListener('click', (e) => {
-        // 如果点击的是按钮，不触发详情展开
         if (e.target.closest('button')) return;
         const kid = row.dataset.kid;
         _selectedId = (_selectedId === kid) ? null : kid;
@@ -319,9 +339,7 @@ const Knowledge = (() => {
     });
   }
 
-  // ================================================================
-  // 辅助
-  // ================================================================
+  // ===== 辅助 =====
 
   function _esc(s) {
     const d = document.createElement('div');
@@ -332,10 +350,6 @@ const Knowledge = (() => {
   function _escAttr(s) {
     return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
-
-  // ================================================================
-  // 公开 API
-  // ================================================================
 
   return { mount, destroy };
 })();

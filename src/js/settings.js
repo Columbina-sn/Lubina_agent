@@ -156,6 +156,7 @@ const Settings = (() => {
     switch (section) {
       case 'preferences': _renderPreferences(content); break;
       case 'providers': _renderProviders(content); break;
+      case 'defaultModels': _renderDefaultModels(content); break;
       case 'shortcuts': _renderShortcuts(content); break;
       case 'usage': _renderUsage(content); break;
       case 'about': _renderAbout(content); break;
@@ -239,6 +240,80 @@ const Settings = (() => {
     }
     _renderSection('preferences');
     _showToast('已恢复默认设置', 'info');
+  }
+
+  // ── 默认模型 ──
+
+  function _renderDefaultModels(container) {
+    container.innerHTML = `
+      <div class="settings-section-header">
+        <h3>默认模型</h3>
+        <p class="section-desc">为各项功能设置默认使用的 AI 模型</p>
+      </div>
+      <div class="settings-card" id="defaultModelsCard">
+        <div class="form-group">
+          <label>知识库存储文件模型</label>
+          <p class="section-desc" style="margin:0 0 8px 0;">上传文件到知识库时，用哪个模型提取结构化信息（留空则不使用 AI 提取）</p>
+          <select class="input" id="settingKbModel" onchange="Settings.onKbModelChange(this.value)">
+            <option value="">不使用 AI 提取</option>
+          </select>
+        </div>
+      </div>`;
+    _loadKbModelSelector();
+  }
+
+  async function _loadKbModelSelector() {
+    const select = document.getElementById('settingKbModel');
+    if (!select) return;
+
+    try {
+      const provs = await api.get('/api/providers');
+      const enabledProviders = (provs || []).filter(p => p.is_enabled);
+      const options = [];
+
+      for (const p of enabledProviders) {
+        const enabledModels = (p.models || []).filter(m => m.is_enabled);
+        for (const m of enabledModels) {
+          const value = `${p.id}::${m.model_name}`;
+          options.push({ value, label: `${p.name} · ${m.display_name || m.model_name}` });
+        }
+      }
+
+      // 保留"不使用 AI 提取"选项
+      select.innerHTML = '<option value="">不使用 AI 提取</option>' +
+        options.map(o => `<option value="${o.value}">${_esc(o.label)}</option>`).join('');
+
+      // 恢复已保存的选择
+      try {
+        const savedModel = await configAPI.get('kb_model');
+        const savedProvider = await configAPI.get('kb_provider');
+        // configAPI.get 返回的是 {key, value} 对象，需取 .value
+        const modelVal = savedModel?.value || '';
+        const provVal = savedProvider?.value || '';
+        if (modelVal && provVal) {
+          const val = `${provVal}::${modelVal}`;
+          if (select.querySelector(`option[value="${val}"]`)) {
+            select.value = val;
+          }
+        }
+      } catch (_) { /* 配置可能还未创建 */ }
+    } catch (_) {
+      select.innerHTML = '<option value="">加载失败</option>';
+    }
+  }
+
+  async function onKbModelChange(value) {
+    if (!value) {
+      await configAPI.set('kb_model', '');
+      await configAPI.set('kb_provider', '');
+    } else {
+      const [pid, mname] = value.split('::');
+      if (pid && mname) {
+        await configAPI.set('kb_provider', pid);
+        await configAPI.set('kb_model', mname);
+      }
+    }
+    _showToast('已保存', 'success');
   }
 
   // ── 供应商（左右分栏）──
@@ -715,6 +790,7 @@ const Settings = (() => {
     saveProviderDetail, toggleProvider, confirmDeleteProvider,
     showAddModel, addModel, toggleModel, deleteModel,
     onThemeChange, onFontSizeInput, onMaxTurnsChange, restoreDefaults,
+    onKbModelChange, _loadKbModelSelector,
     openCodeMirrorSite, toggleVisible,
   };
 })();
