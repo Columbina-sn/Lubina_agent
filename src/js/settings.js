@@ -168,6 +168,7 @@ const Settings = (() => {
   function _renderPreferences(container) {
     const theme = localStorage.getItem('lubina_theme') || 'auto';
     const maxTurns = localStorage.getItem('lubina_max_turns') || '15';
+    const maxLoopRounds = localStorage.getItem('lubina_max_loop_rounds') || '8';
     const fontSize = localStorage.getItem('lubina_font_size') || '1.0';
 
     container.innerHTML = `
@@ -199,13 +200,23 @@ const Settings = (() => {
         </div>
       </div>
       <div class="settings-card" style="margin-top:14px;">
-        <div class="form-group">
-          <label>最大对话轮数</label>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <input type="number" class="input" id="settingMaxTurns" value="${maxTurns}" min="5" max="50" style="width:120px;"
-                   onchange="Settings.onMaxTurnsChange(this.value)">
-            <span class="form-hint">超过后自动摘要压缩上下文</span>
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">最大对话轮数</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">对话越长，AI 记住的上下文越多</p>
           </div>
+          <input type="number" class="input" id="settingMaxTurns" value="${maxTurns}" min="10" max="30" style="width:80px;"
+                 onchange="Settings.onMaxTurnsChange(this.value)">
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">最大循环轮数</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">AI 搜索和查资料的步数上限</p>
+          </div>
+          <input type="number" class="input" id="settingMaxLoopRounds" value="${maxLoopRounds}" min="5" max="20" style="width:80px;"
+                 onchange="Settings.onMaxLoopRoundsChange(this.value)">
         </div>
       </div>
       <div class="form-actions" style="margin-top:20px;">
@@ -227,13 +238,24 @@ const Settings = (() => {
   }
 
   function onMaxTurnsChange(value) {
-    localStorage.setItem('lubina_max_turns', value);
+    const v = Math.max(10, Math.min(30, parseInt(value) || 15));
+    localStorage.setItem('lubina_max_turns', v);
+    configAPI.set('max_turns', String(v)).catch(() => {});
+  }
+
+  function onMaxLoopRoundsChange(value) {
+    const v = Math.max(5, Math.min(20, parseInt(value) || 8));
+    localStorage.setItem('lubina_max_loop_rounds', v);
+    configAPI.set('max_loop_rounds', String(v)).catch(() => {});
   }
 
   function restoreDefaults() {
     localStorage.setItem('lubina_theme', 'auto');
     localStorage.setItem('lubina_font_size', '1.0');
     localStorage.setItem('lubina_max_turns', '15');
+    localStorage.setItem('lubina_max_loop_rounds', '8');
+    configAPI.set('max_turns', '15').catch(() => {});
+    configAPI.set('max_loop_rounds', '8').catch(() => {});
     if (typeof App !== 'undefined') {
       App.applyTheme('auto');
       App.applyFontSize(1.0);
@@ -789,7 +811,7 @@ const Settings = (() => {
     showAddProvider, onVendorChange, addProvider,
     saveProviderDetail, toggleProvider, confirmDeleteProvider,
     showAddModel, addModel, toggleModel, deleteModel,
-    onThemeChange, onFontSizeInput, onMaxTurnsChange, restoreDefaults,
+    onThemeChange, onFontSizeInput, onMaxTurnsChange, onMaxLoopRoundsChange, restoreDefaults,
     onKbModelChange, _loadKbModelSelector,
     openCodeMirrorSite, toggleVisible,
   };

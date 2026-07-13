@@ -45,7 +45,11 @@ async def knowledge_grep(query: str) -> str:
         rows = conn.execute(sql, params).fetchall()
 
         if not rows:
-            return "知识库中没有找到相关信息。"
+            return (
+                "知识库中没有找到与当前搜索词匹配的信息。\n"
+                "可能原因：关键词不够精准，或者知识库中确实没有相关记录。\n"
+                "建议：换几个同义词或更简短的关键词再搜一次。如果换词后仍然无结果，就老实告诉用户没找到，不要反复重试。"
+            )
 
         # ── 2. difflib 精排 ──
         query_lower = query.lower()

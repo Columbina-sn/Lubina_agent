@@ -136,15 +136,43 @@ const Bridge = (() => {
   }
 
   async function windowToggleMaximize() {
-    return _safeCall(() =>
-      _invoke('plugin:window|toggle_maximize', { label: _winLabel() })
-    );
+    return _safeCall(async () => {
+      await _invoke('plugin:window|toggle_maximize', { label: _winLabel() });
+      // 切换后更新图标
+      setTimeout(() => _updateMaximizeIcon(), 150);
+    });
+  }
+
+  async function windowIsMaximized() {
+    return _safeCall(async () => {
+      return await _invoke('plugin:window|is_maximized', { label: _winLabel() });
+    }, false);
   }
 
   async function windowClose() {
     return _safeCall(() =>
       _invoke('plugin:window|close', { label: _winLabel() })
     );
+  }
+
+  /** 更新最大化按钮图标 */
+  async function _updateMaximizeIcon() {
+    const btn = document.querySelector('.win-btn-maximize');
+    if (!btn) return;
+    const isMax = await windowIsMaximized();
+    btn.innerHTML = isMax
+      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="13" height="13" rx="2"/><path d="M9 3h13v12"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>';
+  }
+
+  /** 初始化窗口状态监听 */
+  function initWindowState() {
+    if (!isTauri()) return;
+    _updateMaximizeIcon();
+    // 监听窗口大小变化来更新图标
+    window.addEventListener('resize', () => {
+      _updateMaximizeIcon();
+    });
   }
 
   // ===== 公开 API =====
@@ -162,6 +190,8 @@ const Bridge = (() => {
     writeTextFile,
     windowMinimize,
     windowToggleMaximize,
+    windowIsMaximized,
     windowClose,
+    initWindowState,
   };
 })();

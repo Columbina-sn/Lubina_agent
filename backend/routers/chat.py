@@ -118,6 +118,9 @@ async def chat_completions(req: ChatRequest):
                 elif event_type == "thinking":
                     yield f"data: {json.dumps({'type': 'thinking'})}\n\n"
 
+                elif event_type == "max_rounds":
+                    yield f"data: {json.dumps(event)}\n\n"
+
                 elif event_type == "done":
                     yield "data: [DONE]\n\n"
                     done_sent = True

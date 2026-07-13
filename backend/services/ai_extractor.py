@@ -9,6 +9,7 @@ import difflib
 from typing import Optional
 from ..database import get_db
 from ..config import DEBUG
+from .llm_caller import LLMCaller
 
 # 模糊匹配阈值
 FUZZY_THRESHOLD = 0.85
@@ -57,7 +58,6 @@ async def call_ai_non_streaming(
 
     供知识提取等不需要流式的场景使用。
     """
-    import httpx
     from ..database import get_db as _get_db
 
     conn = _get_db()
@@ -72,37 +72,8 @@ async def call_ai_non_streaming(
     if not provider:
         raise ValueError(f"供应商不存在或已停用: {provider_id}")
 
-    api_key = provider["api_key"] or ""
-    if not api_key:
-        raise ValueError("请先在设置中填写 API Key")
-
-    base = provider["base_url"].rstrip("/")
-    path = provider["api_path"]
-    if not path.startswith("/"):
-        path = "/" + path
-    url = f"{base}{path}"
-
-    body = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-        resp = await client.post(url, headers=headers, json=body)
-
-        if resp.status_code >= 400:
-            err_text = resp.text[:500]
-            raise RuntimeError(f"AI API 返回错误 ({resp.status_code}): {err_text}")
-
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return content
+    caller = LLMCaller(dict(provider), model)
+    return await caller.call(messages)
 
 
 async def process_file_for_knowledge(

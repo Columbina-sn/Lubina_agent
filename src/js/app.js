@@ -45,6 +45,8 @@ const App = (() => {
     showPage('home');
     restoreLoginState();
     FileExplorer.init(els.fileExplorer);
+    // 初始化窗口状态（最大化图标等）
+    if (typeof Bridge !== 'undefined' && Bridge.initWindowState) Bridge.initWindowState();
   }
 
   // ===== 主题 =====

@@ -985,28 +985,38 @@ select.input {
 
 .msg-bubble.ai-tool-call {
   background: rgba(107, 82, 223, 0.06);
-  border: 1px solid rgba(107, 82, 223, 0.15);
-  font-size: 0.8rem; padding: 6px 12px;
+  border: 1px solid rgba(107, 82, 223, 0.18);
+  font-size: 0.8rem; padding: 8px 14px;
   border-radius: 4px 14px 14px 14px;
+  animation: toolPulseIn 0.3s var(--ease-out);
 }
 
 .msg-bubble.ai-tool-result {
   background: rgba(61, 165, 93, 0.05);
   border: 1px solid rgba(61, 165, 93, 0.12);
-  font-size: 0.8rem; padding: 6px 12px;
+  font-size: 0.8rem; padding: 8px 14px;
   border-radius: 4px 14px 14px 14px;
+  animation: toolPulseIn 0.3s var(--ease-out);
+}
+
+@keyframes toolPulseIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .tool-call-detail {
   font-family: "Cascadia Code","Fira Code","JetBrains Mono",monospace;
   font-size: 0.68rem; color: var(--text-tip);
-  margin-bottom: 2px; word-break: break-all;
+  margin-bottom: 4px; word-break: break-all;
+  opacity: 0.75;
 }
 
 .tool-call-human {
-  font-size: 0.8rem; color: var(--text-sub);
+  font-size: 0.82rem; color: var(--text-sub);
+  line-height: 1.5;
 }
 
 .tool-result-human {
-  font-size: 0.8rem; color: var(--color-success);
+  font-size: 0.82rem; color: var(--color-success);
+  line-height: 1.5;
 }

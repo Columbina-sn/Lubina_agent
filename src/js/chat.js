@@ -311,29 +311,46 @@ const Chat = (() => {
   function _toolLabel(tool, args, isResult) {
     const labels = {
       knowledge_grep: {
-        detail: `知识库检索: "${args?.query || ''}"`,
-        human: '检索知识库',
+        detail: `检索知识库：「${args?.query || ''}」`,
+        human: '正在翻阅你的知识库，查找相关信息……',
         done: '知识库检索完成',
       },
       web_search: {
-        detail: `联网搜索: "${args?.query || ''}"`,
-        human: '搜索网络',
-        done: '搜索完成',
+        detail: `联网搜索：「${args?.query || ''}」`,
+        human: '正在网上搜索，稍等一下……',
+        done: '联网搜索完成',
       },
       web_fetch: {
-        detail: `获取网页: ${args?.url || ''}`,
-        human: '获取网页内容',
-        done: '网页获取完成',
+        detail: `读取网页：${args?.url || ''}`,
+        human: 'Lubina 在根据网址查询内容……',
+        done: '网页内容读取完成',
       },
     };
-    const l = labels[tool] || { detail: tool, human: `使用工具: ${tool}`, done: `工具完成: ${tool}` };
+    const l = labels[tool] || {
+      detail: `${tool}：${JSON.stringify(args || {})}`,
+      human: `正在使用 ${tool}……`,
+      done: `${tool} 完成`
+    };
     return { detail: l.detail, human: isResult ? l.done : l.human };
+  }
+
+  /** 格式化思考时间 */
+  function _fmtThinking(seconds) {
+    const s = parseFloat(seconds);
+    if (!s || s <= 0) return '';
+    if (s >= 60) {
+      const m = Math.floor(s / 60);
+      const sec = Math.round(s % 60);
+      return sec > 0 ? `${m} 分 ${sec} 秒` : `${m} 分钟`;
+    }
+    return `${s.toFixed(1)} 秒`;
   }
 
   async function _doStreamSend(conv, apiMessages, aiMsg) {
     let throttleTimer = null;
-    // 跟踪工具消息的索引偏移
-    const toolMsgOffset = 0;
+    // 同工具连续调用时静默，不弹气泡
+    let _lastReadTool = '';
+    let _silentMode = false;
 
     try {
       conv.abortController = await _chatStream({
@@ -342,10 +359,14 @@ const Chat = (() => {
         model: conv.model,
         mode: conv.mode,
         onDelta: (delta) => {
+          _silentMode = false;
           if (aiMsg.thinking) {
             aiMsg.thinking = false;
-            aiMsg.thinkingTime = ((Date.now() - aiMsg.startTime) / 1000).toFixed(1);
+            aiMsg.thinkingTime = _fmtThinking((Date.now() - aiMsg.startTime) / 1000);
             _renderMessages(conv.messages);
+          }
+          if (!conv.messages.includes(aiMsg)) {
+            conv.messages.push(aiMsg);
           }
           aiMsg.content += delta;
 
@@ -359,64 +380,80 @@ const Chat = (() => {
         },
         onToolStart: (event) => {
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
-          // 移除空的 AI 占位气泡（还没内容），工具链中不需要它
+          // 同工具连续调用 → 静默，不弹气泡
+          if (event.tool === _lastReadTool) {
+            _silentMode = true;
+            return;
+          }
+          _silentMode = false;
+          _lastReadTool = event.tool;
+
+          // 移除 AI 占位，插调用气泡
           const idx = conv.messages.indexOf(aiMsg);
           if (idx >= 0) conv.messages.splice(idx, 1);
-          // 插入工具调用气泡
           const { detail, human } = _toolLabel(event.tool, event.args, false);
-          const toolMsg = {
+          conv.messages.push({
             role: 'assistant', type: 'tool_call',
             tool: event.tool, toolDetail: detail,
             toolHuman: human,
             content: '', streaming: false,
             timestamp: Date.now(),
-          };
-          conv.messages.push(toolMsg);
+          });
           _renderMessages(conv.messages);
           _scrollToBottom();
         },
         onToolResult: (event) => {
-          const { detail, human } = _toolLabel(event.tool, event.args, true);
-          const resultMsg = {
+          if (_silentMode) return;  // 静默模式不弹成功气泡
+          const { human } = _toolLabel(event.tool, event.args, true);
+          conv.messages.push({
             role: 'assistant', type: 'tool_result',
-            tool: event.tool, toolDetail: detail,
-            toolHuman: human,
-            toolResult: event.result || '',
+            tool: event.tool, toolResultHuman: human,
             content: '', streaming: false,
             timestamp: Date.now(),
-          };
-          conv.messages.push(resultMsg);
-          // 创建新的 AI 占位气泡，准备接收下一段文本回复
-          aiMsg.content = '';
-          aiMsg.thinking = true;
-          aiMsg.thinkingTime = undefined;
-          aiMsg.streaming = true;
-          aiMsg.startTime = Date.now();
-          aiMsg.type = 'info';
-          conv.messages.push(aiMsg);
-          _renderMessages(conv.messages);
-          _scrollToBottom();
+          });
+          // 重建 AI 占位
+          if (!conv.messages.includes(aiMsg) && !aiMsg.content) {
+            aiMsg.content = '';
+            aiMsg.thinking = true;
+            aiMsg.thinkingTime = undefined;
+            aiMsg.streaming = true;
+            aiMsg.startTime = Date.now();
+            aiMsg.type = 'info';
+            conv.messages.push(aiMsg);
+            _renderMessages(conv.messages);
+            _scrollToBottom();
+          }
         },
         onToolError: (event) => {
+          _silentMode = false;
           conv.messages.push({
-            role: 'assistant', type: 'tool_call',
+            role: 'assistant', type: 'tool_error_msg',
             tool: event.tool || 'system',
             toolDetail: event.error || '工具执行出错',
-            toolHuman: '工具执行出错',
             content: '', streaming: false, timestamp: Date.now(),
           });
           _renderMessages(conv.messages);
           _scrollToBottom();
         },
+        onMaxRounds: (max) => {
+          aiMsg.maxRoundsReached = max;
+        },
         onDone: () => {
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+          // _showPendingResult 不存在，已移除
           aiMsg.thinking = false;
           aiMsg.streaming = false;
           if (!aiMsg.content) {
-            // 空占位（可能被工具链消耗了）— 移除
-            const idx = conv.messages.indexOf(aiMsg);
-            if (idx >= 0) conv.messages.splice(idx, 1);
-          } else {
+            const hasToolCall = conv.messages.some(m => m.type === 'tool_call' || m.type === 'tool_result');
+            if (hasToolCall) {
+              aiMsg.content = '（AI 未能生成回复，请重试或换一种方式提问）';
+              aiMsg.type = 'error';
+            } else {
+              const idx = conv.messages.indexOf(aiMsg);
+              if (idx >= 0) conv.messages.splice(idx, 1);
+            }
+          }
+          if (aiMsg.content) {
             _updateLastBubble(aiMsg);
           }
           _scrollToBottom();
@@ -527,7 +564,7 @@ const Chat = (() => {
   // ===== 流式 API 调用（Re-Act 模式，支持工具事件）=====
 
   async function _chatStream(options) {
-    const { messages, providerId, model, mode, onDelta, onDone, onError, onToolStart, onToolResult, onToolError } = options;
+    const { messages, providerId, model, mode, onDelta, onDone, onError, onToolStart, onToolResult, onToolError, onMaxRounds } = options;
     const controller = new AbortController();
 
     try {
@@ -578,6 +615,8 @@ const Chat = (() => {
             } else if (json.type === 'delta') {
               const delta = json.content;
               if (delta) onDelta(delta);
+            } else if (json.type === 'max_rounds') {
+              if (onMaxRounds) onMaxRounds(json.max);
             } else if (json.type === 'thinking') {
               // thinking 状态，前端 placeholder 已处理
             } else if (json.type === 'done') {
@@ -648,6 +687,7 @@ const Chat = (() => {
       options: { label: '请选择一个选项', cls: 'ai-option' },
       tool_call: { label: '', cls: 'ai-tool-call' },
       tool_result: { label: '', cls: 'ai-tool-result' },
+      tool_error_msg: { label: '', cls: 'ai-tool-call' },
     };
     const tl = typeLabels[type] || typeLabels.info;
     let extra = '';
@@ -657,9 +697,14 @@ const Chat = (() => {
       extra += `<div class="thinking-state">思考中……</div>`;
     }
 
-    // 思考耗时（思考结束且有内容时显示）
+    // 思考耗时
     if (msg.thinkingTime && !msg.thinking && msg.content) {
-      extra += `<div class="thinking-time">已思考 ${msg.thinkingTime} 秒</div>`;
+      extra += `<div class="thinking-time">已思考 ${msg.thinkingTime}</div>`;
+    }
+
+    // 达到循环上限提醒
+    if (msg.maxRoundsReached && !msg.thinking && msg.content) {
+      extra += `<div class="thinking-time max-rounds-hint">已达本轮操作上限，可在设置中调高最大循环轮数</div>`;
     }
 
     // action label（streaming 时带呼吸动画）
@@ -674,7 +719,7 @@ const Chat = (() => {
       try { mdContent = marked.parse(msg.content || '') || ''; } catch (_) { mdContent = _esc(msg.content || ''); }
     }
 
-    // 流式光标（思考中不显示光标，只有"思考中……"文字）
+    // 流式光标
     if (msg.streaming && !msg.thinking) {
       mdContent += '<span class="typing-cursor"></span>';
     }
@@ -685,18 +730,23 @@ const Chat = (() => {
       extra += `<div class="option-buttons">${btns}</div>`;
     }
 
-    // 工具调用气泡
+    // 工具调用气泡：小字详情 + 白话说明
     if (type === 'tool_call') {
       return `<div class="msg-bubble ai-bubble ai-tool-call">
         <div class="tool-call-detail">${_esc(msg.toolDetail || '')}</div>
         <div class="tool-call-human">${_esc(msg.toolHuman || '')}</div>
-        ${msg.streaming ? '<div class="thinking-state" style="margin-top:4px;">执行中…</div>' : ''}
       </div>`;
     }
+    // 工具结果气泡：白话说明完成了什么
     if (type === 'tool_result') {
       return `<div class="msg-bubble ai-bubble ai-tool-result">
-        <div class="tool-call-detail">${_esc(msg.toolDetail || '')}</div>
-        <div class="tool-result-human">${_esc(msg.toolHuman || '')}</div>
+        <div class="tool-result-human">${_esc(msg.toolResultHuman || msg.toolHuman || '')}</div>
+      </div>`;
+    }
+    // 工具错误气泡
+    if (type === 'tool_error_msg') {
+      return `<div class="msg-bubble ai-bubble ai-tool-call" style="border-color:var(--color-error);">
+        <div class="tool-call-detail" style="color:var(--color-error);">${_esc(msg.toolDetail || '工具出错')}</div>
       </div>`;
     }
 
@@ -717,9 +767,10 @@ const Chat = (() => {
     if (!msg.thinking) {
       const thinkingEl = lastRow.querySelector('.thinking-state');
       if (thinkingEl) thinkingEl.remove();
-      // 如果有思考耗时但尚未显示，通过全量重建来展示
-      if (msg.thinkingTime && !lastRow.querySelector('.thinking-time')) {
-        // 无法局部插入，标记需要重建
+      // 有新增的元信息（思考耗时 / 上限提示）→ 全量重建
+      const hasNewMeta = (msg.thinkingTime && !lastRow.querySelector('.thinking-time'))
+                      || (msg.maxRoundsReached && !lastRow.querySelector('.max-rounds-hint'));
+      if (hasNewMeta) {
         const conv = _getActiveConversation();
         if (conv) _renderMessages(conv.messages);
         return;
@@ -826,8 +877,7 @@ const Chat = (() => {
             return {
               role: m.role, type: m.type, content: m.content, timestamp: m.timestamp,
               action: m.action, options: m.options, streaming: false,
-              // 工具调用气泡字段
-              tool: m.tool, toolDetail: m.toolDetail, toolHuman: m.toolHuman, toolResult: m.toolResult,
+              tool: m.tool, toolDetail: m.toolDetail, toolHuman: m.toolHuman, toolResult: m.toolResult, toolResultHuman: m.toolResultHuman,
             };
           })
         };
@@ -849,6 +899,14 @@ const Chat = (() => {
     switchTo: _switchConversation,
     deleteConversation,
     newConversation: () => {
+      // 如果已有空对话（没发过消息），直接切过去，不重复创建
+      const empty = conversations.find(c => !(c.messages || []).some(m => m.role === 'user'));
+      if (empty) {
+        _switchConversation(empty.id);
+        const inp = document.getElementById('chatInput');
+        if (inp) inp.focus();
+        return;
+      }
       const conv = _createConversation('新对话');
       _renderConversationList();
       _switchConversation(conv.id);

@@ -10,59 +10,85 @@
   {"type": "tool_error", "tool": "...", "error": "..."}
   {"type": "delta", "content": "..."}
   {"type": "done"}
+
+v2 改进：
+- 循环不退出直到 AI 明确完成任务或达到上限
+- 每次工具结果后强制 AI 评估是否还需要更多工具
+- 工具调用过程中 AI 只需报告进度，不给出最终答案
 """
 
 import json
 import re
-import httpx
+from datetime import datetime, timezone
 from typing import Callable, Optional
 from ..database import get_db
 from ..tools.web_search import web_search
 from ..tools.web_fetch import web_fetch
 from ..tools.knowledge_grep import knowledge_grep
+from .llm_caller import LLMCaller
 
-MAX_TOOL_CALLS = 5
+DEFAULT_MAX_TOOL_CALLS = 8
 
 # ── System Prompt ──
 
-SYSTEM_PROMPT = """你是 Lubina，一款运行在用户个人电脑上的桌面 AI 助手。你的能力包括：
+def _build_system_prompt() -> str:
+    """构建系统提示词，包含当前北京时间"""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc) + timedelta(hours=8)  # UTC+8 北京时间
+    beijing_time = now.strftime("%Y 年 %m 月 %d 日（周%w）%H:%M")
+    beijing_time = beijing_time.replace("周0", "周日").replace("周1", "周一").replace("周2", "周二").replace("周3", "周三").replace("周4", "周四").replace("周5", "周五").replace("周6", "周六")
 
-## 可用工具
-当你需要超出训练数据之外的信息时，回复以下格式的 JSON 来调用工具：
-{"tool": "<工具名>", "parameters": {...}}
+    return f"""你是 Lubina，一款运行在用户个人电脑上的桌面 AI 助手。
 
-你只能调用一个工具。收到工具结果后，再决定是否需要进一步调用。
+当前时间：{beijing_time}（北京时间）
+
+## 回复格式（二选一，不可混合）
+
+A) 需要调用工具 → 只输出一行 JSON，后面不跟任何文字：
+   {{"tool": "<工具名>", "parameters": {{...}}}}
+
+B) 任务已全部完成 → 输出纯文本最终回答
+
+绝对不能 JSON + 文字混合输出。
+
+## 可用工具（每次调用一个）
 
 ### 1. knowledge_grep — 搜索用户知识库
-搜索用户个人存储的信息（个人信息、学习资料等）。
-参数: {"query": "搜索词1 搜索词2 搜索词3"}
-**查询技巧：用多个简短同义词/相关词（空格分隔），不要只用一个词。**
-例如用户问"在哪上学" → query: "学校 大学 就读 学历 教育"
-**优先级最高：涉及用户个人信息时，必须先搜索知识库。**
+参数: {{"query": "搜索词1 搜索词2 搜索词3"}}
+用多个简短同义词/相关词（空格分隔），不要只用单个词。
 
 ### 2. web_search — 联网搜索
-搜索互联网获取实时或最新信息。
-参数: {"query": "搜索查询词"}
+参数: {{"query": "搜索查询词"}}
 
 ### 3. web_fetch — 抓取网页内容
-读取指定 URL 的详细内容。
-参数: {"url": "https://..."}
+参数: {{"url": "https://..."}}
+只抓取最相关的 1-2 个链接，不要逐个抓取所有搜索结果。
 
-## 搜索策略（严格按此顺序）
-1. 涉及用户个人信息、存储的资料、用户曾告诉过你的 → **必须先用 knowledge_grep 搜索知识库**
-2. 知识库无结果，或需要实时/最新信息 → 使用 web_search 联网搜索
-3. 需要阅读搜索结果的详细内容 → 使用 web_fetch 抓取
+## 搜索策略
+
+1. 个人信息 → 先 knowledge_grep
+2. 实时信息 → web_search
+3. 需要网页详情 → web_fetch（挑最相关的抓，不要全抓）
 
 ## 规则
-- 每次工具调用后，分析结果并决定是否需要进一步操作
-- 工具调用上限：最多 5 轮
-- 知识优先：先搜知识库再联网
-- 不要编造信息，不确定时用工具查
-- 用中文回复用户，回复要简洁有帮助
-- 简单的闲聊无需调用工具，直接回复即可"""
+
+- 不确定就查，不要编造信息
+- 信息够了就停，不要过度搜索
+- 同一工具连续 2 次无结果就该换方式或诚实说明；连续 3 次不同工具均无结果 → 系统会强制禁止继续调用，必须直接回答
+- **查不到就直说查不到**：如果工具返回「未找到」，诚实告知用户，不要用训练数据里的旧知识编造
+- 用中文回复，友好、详细
+- 简单闲聊无需工具，直接答"""
 
 
 # ── 工具调度 ──
+
+# 工具元数据：唯一数据源，TOOL_LABELS 从此派生
+# type: "read"（只读，前端合并气泡）| "write"（写入，前端独立气泡）
+_TOOL_META = {
+    "knowledge_grep": {"type": "read", "label": "知识库检索"},
+    "web_search":     {"type": "read", "label": "联网搜索"},
+    "web_fetch":      {"type": "read", "label": "网页抓取"},
+}
 
 TOOL_MAP = {
     "knowledge_grep": knowledge_grep,
@@ -70,11 +96,24 @@ TOOL_MAP = {
     "web_fetch": web_fetch,
 }
 
-TOOL_LABELS = {
-    "knowledge_grep": "知识库检索",
-    "web_search": "联网搜索",
-    "web_fetch": "网页抓取",
-}
+TOOL_LABELS = {k: v["label"] for k, v in _TOOL_META.items()}
+
+def _get_max_loop_rounds() -> int:
+    """从 user_config 读取最大循环轮数，默认 8"""
+    try:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT value FROM user_config WHERE key = ?", ("max_loop_rounds",)
+            ).fetchone()
+            if row and row["value"]:
+                val = int(row["value"])
+                return max(5, min(20, val))
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return DEFAULT_MAX_TOOL_CALLS
 
 
 def _safe_str(v) -> str:
@@ -123,30 +162,10 @@ async def _execute_tool(tool_name: str, params: dict) -> tuple[str, str]:
 
 
 def _try_parse_json(s: str) -> Optional[dict]:
-    """尝试解析 JSON，失败则尝试修复常见 AI 错误后重试"""
-    s = s.strip()
-    # 直接解析
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
-    # 修复1: 单引号换双引号
-    try:
-        obj = json.loads(s.replace("'", '"'))
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
-    # 修复2: 去除尾部多余逗号 (},] 等)
-    cleaned = re.sub(r',\s*([}\]])', r'\1', s)
-    try:
-        obj = json.loads(cleaned)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
+    """解析 JSON，复用 LLMCaller 成熟的多层修复逻辑"""
+    obj = LLMCaller._parse_json(s)
+    if isinstance(obj, dict):
+        return obj
     return None
 
 
@@ -192,65 +211,22 @@ async def _call_ai_buffered(
     messages: list[dict],
     abort_check: Callable = None,
 ) -> str:
-    """调用 AI → 收集完整响应文本（不流式推送）
+    """调用 AI → 返回完整响应文本（使用 LLMCaller 非流式，自带重试）"""
+    caller = LLMCaller(provider_config, model)
+    return await caller.call(messages, abort_check=abort_check)
 
-    先收集全部文本再返回，由调用方决定：
-    - 如果是工具调用 → 不展示给用户
-    - 如果是最终回复 → 作为 delta 流式推送
+
+async def _stream_text(text: str, stream_callback, chunk_size: int = 4):
+    """将文本流式推送到前端（模拟真实的逐字输出）
+
+    最终回复只有一次 AI 调用，拿到全文后手动分块。
+    块大小为 4 字符 + 20ms 间隔，模拟人类阅读速度的流式体验。
     """
-    api_key = provider_config["api_key"] or ""
-    if not api_key:
-        raise ValueError("请先在设置中填写 API Key")
-
-    base = provider_config["base_url"].rstrip("/")
-    path = provider_config["api_path"]
-    if not path.startswith("/"):
-        path = "/" + path
-    url = f"{base}{path}"
-
-    body = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    full_text = ""
-
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-        async with client.stream("POST", url, headers=headers, json=body) as resp:
-            if resp.status_code >= 400:
-                err_text = await resp.aread()
-                try:
-                    err_json = json.loads(err_text)
-                    err_msg = err_json.get("error", {}).get("message", "") or resp.reason_phrase
-                except Exception:
-                    err_msg = err_text.decode("utf-8", errors="replace")[:500]
-                raise RuntimeError(f"AI API 返回错误 ({resp.status_code}): {err_msg}")
-
-            async for line in resp.aiter_lines():
-                if abort_check and abort_check():
-                    full_text += "\n\n（用户已停止生成）"
-                    return full_text
-
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    obj = json.loads(data)
-                    delta = obj.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if delta:
-                        full_text += delta
-                except json.JSONDecodeError:
-                    pass
-
-    return full_text
+    import asyncio as _asyncio
+    for i in range(0, len(text), chunk_size):
+        chunk = text[i:i + chunk_size]
+        await stream_callback({"type": "delta", "content": chunk})
+        await _asyncio.sleep(0.02)  # 20ms 间隔，模拟自然流式
 
 
 # ── 主循环 ──
@@ -298,12 +274,15 @@ async def run_react_loop(
 
     full_messages = []
     if not has_system:
-        full_messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        full_messages.append({"role": "system", "content": _build_system_prompt()})
     full_messages.extend(messages)
 
     tool_call_count = 0
+    consecutive_empty = 0  # 连续未产出有效结果的次数，达 3 次强制禁止重试
+    max_tool_calls = _get_max_loop_rounds()
+    _last_tool = ""  # 去重：上一个工具名
 
-    while tool_call_count < MAX_TOOL_CALLS:
+    while tool_call_count < max_tool_calls:
         # 检查中止
         if abort_check and abort_check():
             await stream_callback({"type": "done"})
@@ -312,7 +291,7 @@ async def run_react_loop(
         # 通知前端 AI 正在思考
         await stream_callback({"type": "thinking"})
 
-        # ── 调用 AI ──
+        # ── 调用 AI（非流式：工具 JSON 短，非流式更快更可靠）──
         try:
             response_text = await _call_ai_buffered(
                 provider_config=dict(provider),
@@ -331,66 +310,137 @@ async def run_react_loop(
 
         # ── 检查是否是工具调用 ──
         tool_call = _parse_tool_call(response_text)
+
+        # 空响应保护
+        if not tool_call and not response_text.strip():
+            if tool_call_count == 0:
+                await stream_callback({"type": "done"})
+                return "（AI 返回了空内容，请重试）"
+            full_messages.append({
+                "role": "system",
+                "content": "[系统通知] 你刚才的回复是空的。请基于已有的工具结果，给用户一个完整的最终回答。",
+            })
+            continue
+
         if not tool_call:
-            # ✅ 最终回复 — 分块流式推送给前端
-            chunk_size = 10
-            for i in range(0, len(response_text), chunk_size):
-                chunk = response_text[i:i + chunk_size]
-                await stream_callback({"type": "delta", "content": chunk})
-            await stream_callback({"type": "done"})
+            # ✅ 最终回复 — 流式推送给前端
+            await _stream_text(response_text, stream_callback)
             return response_text
 
-        # ── 执行工具 ──
-        tool_call_count += 1
+        # ── 去重判断：同 read 工具连续调用 → 不计次、不弹泡 ──
         tool_name = tool_call.get("tool", "")
         params = tool_call.get("parameters", {})
         label = TOOL_LABELS.get(tool_name, tool_name)
+        meta = _TOOL_META.get(tool_name, {})
+        is_read = meta.get("type") == "read"
 
-        await stream_callback({
-            "type": "tool_start",
-            "tool": tool_name,
-            "args": params,
-            "label": label,
-        })
+        is_dup = is_read and (tool_name == _last_tool)
+        _last_tool = tool_name
+
+        # ── 执行工具 ──
+        if not is_dup:
+            tool_call_count += 1
+            await stream_callback({
+                "type": "tool_start",
+                "tool": tool_name,
+                "args": params,
+                "label": label,
+            })
 
         result, error = await _execute_tool(tool_name, params)
 
+        # 只存工具 JSON，保持上下文干净
+        assistant_content = json.dumps(tool_call, ensure_ascii=False)
+        full_messages.append({
+            "role": "assistant",
+            "content": assistant_content,
+        })
+
+        remaining = max_tool_calls - tool_call_count
+
+        # ── 判断本次结果是否"空"（没产出有效信息）──
+        is_empty = False
         if error:
-            await stream_callback({
-                "type": "tool_error",
-                "tool": tool_name,
-                "error": error,
-            })
+            is_empty = True
+        elif result:
+            # 知识库/搜索/抓取返回了"没找到"类的结果 → 视为空
+            empty_signals = [
+                "没有找到相关信息", "未找到与", "没有找到与",
+                "网页内容为空", "无法解析",
+                "搜索服务暂时不可用",
+            ]
+            is_empty = any(sig in result for sig in empty_signals)
+
+        if is_empty:
+            consecutive_empty += 1
+        else:
+            consecutive_empty = 0
+
+        if error:
+            if not is_dup:
+                await stream_callback({
+                    "type": "tool_error",
+                    "tool": tool_name,
+                    "error": error,
+                })
+            stop_hint = ""
+            if consecutive_empty >= 3:
+                stop_hint = (
+                    "\n[系统指令] 你已经连续 3 次尝试均未获得有效结果。"
+                    "立即停止所有工具调用，用现有知识诚实回答用户。不得再发起任何工具请求。"
+                )
             full_messages.append({
-                "role": "assistant",
-                "content": f"正在使用 {tool_name} 工具{'重试' if tool_call_count > 1 else ''}…",
-            })
-            full_messages.append({
-                "role": "user",
-                "content": f"[系统通知] 工具 {tool_name} 执行出错: {error}\n请根据现有信息继续回答用户。",
+                "role": "system",
+                "content": (
+                    f"[工具结果] 工具 {tool_name} ({label}) 执行出错: {error}\n"
+                    f"剩余机会: {remaining} 次。{stop_hint}"
+                ),
             })
         else:
-            await stream_callback({
-                "type": "tool_result",
-                "tool": tool_name,
-                "result": result,
-                "label": label,
-            })
+            if not is_dup:
+                await stream_callback({
+                    "type": "tool_result",
+                    "tool": tool_name,
+                    "args": params,
+                    "result": result[:500],
+                    "label": label,
+                })
+            else:
+                # 重复调用：后台静默执行，通知 AI 这是重复操作
+                pass
+
+            # 截断防止上下文爆炸
+            max_result_len = 2000
+            if len(result) > max_result_len:
+                result = result[:max_result_len] + f"\n…（截断，原 {len(result)} 字符）"
+
+            dup_hint = "\n[系统提示] 重复调用同一工具，请换方式或基于现有信息回答。" if is_dup else ""
+            stop_hint = ""
+            if consecutive_empty >= 3:
+                stop_hint = (
+                    "\n[系统指令] 你已经连续 3 次尝试均未获得有效结果。"
+                    "立即停止所有工具调用，用现有知识诚实回答用户。不得再发起任何工具请求。"
+                )
             full_messages.append({
-                "role": "assistant",
-                "content": f"正在使用 {tool_name} 工具{'重试' if tool_call_count > 1 else ''}…",
-            })
-            full_messages.append({
-                "role": "user",
-                "content": f"[工具结果] {tool_name} 返回:\n{result}\n\n请基于以上信息继续回答用户的问题。",
+                "role": "system",
+                "content": (
+                    f"[工具结果] {tool_name} ({label}):\n{result}{dup_hint}\n"
+                    f"剩余机会: {remaining} 次。信息够了就回答，不够可继续。{stop_hint}"
+                ),
             })
 
-    # 达到最大轮数，强制 AI 总结
+    # ── 达到最大轮数，强制总结 ──
+    await stream_callback({"type": "max_rounds", "max": max_tool_calls})
+
     full_messages.append({
         "role": "system",
-        "content": f"已达到最大工具调用次数 ({MAX_TOOL_CALLS} 次)。请基于现有信息给出最佳回答。"
+        "content": (
+            f"已达到最大工具调用次数 ({max_tool_calls} 次)。"
+            f"你必须立即用自然语言给用户一个完整的回答。如果某些信息不全，诚实说明。"
+        ),
     })
 
+    final_text = ""
     try:
         final_text = await _call_ai_buffered(
             provider_config=dict(provider),
@@ -398,13 +448,13 @@ async def run_react_loop(
             messages=full_messages,
             abort_check=abort_check,
         )
-        # 流式推送最终回复
-        chunk_size = 10
-        for i in range(0, len(final_text), chunk_size):
-            chunk = final_text[i:i + chunk_size]
-            await stream_callback({"type": "delta", "content": chunk})
-    except Exception as e:
-        final_text = f"错误：{str(e)}"
+    except Exception:
+        final_text = ""
 
+    if not final_text.strip():
+        final_text = "抱歉，请重试。<small>（可在设置中调高最大循环轮数）</small>"
+
+    # 流式推送最终回复
+    await _stream_text(final_text, stream_callback)
     await stream_callback({"type": "done"})
     return final_text
