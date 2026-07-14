@@ -199,13 +199,24 @@ const Chat = (() => {
     });
   }
 
+  /** 分支标题：原标题(n)，已经是(n)结尾则 n+1 */
+  function _branchTitle(title) {
+    title = (title || '新对话').replace(/\s*\(分支\)$/, '').trim();
+    const m = title.match(/\((\d+)\)\s*$/);
+    if (m) {
+      const n = parseInt(m[1], 10) + 1;
+      return title.replace(/\((\d+)\)\s*$/, `(${n})`);
+    }
+    return title + '(1)';
+  }
+
   /** 创建分支：完全复制对话内容，新 ID，供用户向不同方向发展 */
   function branchConversation(id) {
     const src = conversations.find(c => c.id === id);
     if (!src) return;
     const conv = {
       id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      title: (src.title || '新对话') + ' (分支)',
+      title: _branchTitle(src.title || '新对话'),
       messages: src.messages.map(m => ({
         role: m.role, type: m.type, content: m.content, timestamp: m.timestamp,
         action: m.action, options: m.options, streaming: false,
