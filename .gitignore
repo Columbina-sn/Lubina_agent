@@ -18,6 +18,9 @@ CLAUDE.md
 前端UI颜色设计参考.html
 多agent回复内容汇总.md
 
+# Embedding 模型（预下载到本地，约 95MB，不提交）
+backend/models/
+
 # SQLite databases (test data, auto-generated)
 *.db
 

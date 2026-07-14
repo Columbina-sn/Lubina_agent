@@ -45,9 +45,9 @@ class InfoCreate(BaseModel):
 
 class InfoUpdate(BaseModel):
     """更新结构化信息条目"""
-    category: Optional[str] = None
-    content: Optional[str] = None
-    keywords: Optional[List[str]] = None
+    category: Optional[str] = Field(None, max_length=15)
+    content: Optional[str] = Field(None, max_length=150)
+    keywords: Optional[List[str]] = Field(None, max_length=5)
     is_visible: Optional[int] = None
 
 

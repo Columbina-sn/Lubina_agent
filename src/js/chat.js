@@ -396,6 +396,11 @@ const Chat = (() => {
         human: '正在翻阅你的知识库，查找相关信息……',
         done: '知识库检索完成',
       },
+      knowledge_rag: {
+        detail: `语义搜索知识库：「${args?.query || ''}」`,
+        human: '正在用语义理解搜索知识库，匹配含义相近的内容……',
+        done: '知识库语义搜索完成',
+      },
       web_search: {
         detail: `联网搜索：「${args?.query || ''}」`,
         human: '正在网上搜索，稍等一下……',
@@ -430,7 +435,9 @@ const Chat = (() => {
   async function _doStreamSend(conv, apiMessages, aiMsg) {
     let throttleTimer = null;
     // 同工具连续调用时静默，不弹气泡
-    let _lastReadTool = '';
+    // 工具分组：同组工具连续调用算重复（knowledge_grep + knowledge_rag 都是 "kb" 组）
+    const _TOOL_GROUPS = { knowledge_grep: 'kb', knowledge_rag: 'kb' };
+    let _lastReadGroup = '';
     let _silentMode = false;
 
     try {
@@ -461,13 +468,14 @@ const Chat = (() => {
         },
         onToolStart: (event) => {
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
-          // 同工具连续调用 → 静默，不弹气泡
-          if (event.tool === _lastReadTool) {
+          // 同组工具连续调用 → 静默，不弹气泡
+          const group = _TOOL_GROUPS[event.tool] || event.tool;
+          if (group === _lastReadGroup) {
             _silentMode = true;
             return;
           }
           _silentMode = false;
-          _lastReadTool = event.tool;
+          _lastReadGroup = group;
 
           // 移除 AI 占位，插调用气泡
           const idx = conv.messages.indexOf(aiMsg);

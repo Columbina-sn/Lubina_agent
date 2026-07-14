@@ -6,6 +6,8 @@
 全局异常处理 + 统一响应格式 + 健康检查端点。
 业务路由：providers / chat / config / vendors
 """
+import logging
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,9 +18,34 @@ import uvicorn
 
 from .config import HOST, PORT, DEBUG
 from .schemas.response import ApiResponse
-from .database import init_db
+from .database import init_db, diagnose_vector_db
 from .routers import providers, chat, config_router, vendors, knowledge
 from .utils import ok, fail
+
+# ═══════════════════════════════════════════
+# 日志配置
+# ═══════════════════════════════════════════
+
+LOG_FORMAT = "%(asctime)s [%(levelname).1s] %(name)s | %(message)s"
+LOG_DATE = "%H:%M:%S"
+
+# 根 logger：INFO 以上全输出
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    datefmt=LOG_DATE,
+    stream=sys.stdout,
+)
+
+# lubia 命名空间：INFO，第三方别刷屏
+logging.getLogger("lubia").setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+
+logger = logging.getLogger("lubia.main")
 
 # ═══════════════════════════════════════════
 # App 初始化
@@ -29,6 +56,8 @@ from .utils import ok, fail
 async def lifespan(app: FastAPI):
     """启动时初始化数据库，关闭时清理资源"""
     init_db()
+    # 启动诊断：检查向量系统状态
+    _startup_diagnose()
     yield
 
 
@@ -38,6 +67,24 @@ app = FastAPI(
     description="Lubia 桌面 AI 助手后端服务 —— 运行在 127.0.0.1，不对外暴露",
     lifespan=lifespan,
 )
+
+
+def _startup_diagnose():
+    """启动时打印一行向量系统状态"""
+    try:
+        diag = diagnose_vector_db()
+        if not diag.get("vec_loaded"):
+            logger.warning("sqlite-vec 未安装，向量搜索不可用")
+            return
+        info_n = diag.get("info_count", 0)
+        vec_n = diag.get("vec_count", 0)
+        dt = diag.get("orphan_count", 0)
+        status = f"主表 {info_n} 条, 向量 {vec_n} 条"
+        if dt > 0:
+            status += f"（⚠ {dt} 条缺少向量，运行 rebuild_vectors.py 修复）"
+        logger.info(f"向量系统就绪: {status}")
+    except Exception:
+        pass
 
 # CORS：允许前端跨域访问
 # 开发时 Vite dev server 在 localhost:1420
@@ -123,9 +170,15 @@ app.include_router(knowledge.router)
 @app.get("/health")
 async def health():
     """健康检查 —— Tauri 用此接口判断后端是否就绪"""
+    diag = diagnose_vector_db()
     return ok(data={
         "status": "ok",
-        "version": "0.1.0",
+        "version": "0.2.0",
+        "vec_loaded": diag.get("vec_loaded", False),
+        "vec0_exists": diag.get("vec0_exists", False),
+        "info_count": diag.get("info_count", 0),
+        "vec_count": diag.get("vec_count", 0),
+        "orphan_count": diag.get("orphan_count", 0),
     })
 
 

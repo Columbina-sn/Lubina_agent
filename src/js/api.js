@@ -263,6 +263,11 @@ const knowledgeAPI = {
   searchInfos: async (query) => {
     return api.get(`/api/knowledge/infos/search?q=${encodeURIComponent(query)}`);
   },
+
+  /** 同步向量表（补缺+清孤儿） */
+  syncVectors: async () => {
+    return api.post('/api/knowledge/sync-vectors', {});
+  },
 };
 
 // ===== 配置 API =====

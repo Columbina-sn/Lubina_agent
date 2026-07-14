@@ -97,6 +97,32 @@ const Knowledge = (() => {
     input.click();
   }
 
+  // ===== 同步向量 =====
+
+  async function _syncVectors() {
+    if (_checkLocked()) return;
+    if (typeof App !== 'undefined' && App.showToast) {
+      App.showToast('正在检查向量同步状态…', 'info');
+    }
+    try {
+      const result = await knowledgeAPI.syncVectors();
+      const parts = [];
+      if (result.added > 0) parts.push(`补建 ${result.added} 条`);
+      if (result.failed > 0) parts.push(`${result.failed} 条失败`);
+      if (result.orphans_removed > 0) parts.push(`清理 ${result.orphans_removed} 条孤儿`);
+      const msg = parts.length > 0 ? parts.join('，') : '向量已完全同步';
+      if (typeof App !== 'undefined' && App.showToast) {
+        App.showToast(msg, result.failed > 0 ? 'warning' : 'success');
+      }
+      await _loadItems();
+      _render();
+    } catch (e) {
+      if (typeof App !== 'undefined' && App.showToast) {
+        App.showToast('同步失败: ' + (e.message || ''), 'error');
+      }
+    }
+  }
+
   // ===== 切换显隐 =====
 
   async function _toggleVisibility(id) {
@@ -166,6 +192,11 @@ const Knowledge = (() => {
     if (_checkLocked()) return;
 
     const kw = (item.keywords || []).join(', ');
+    const MAX_CATEGORY = 15;
+    const MAX_CONTENT = 150;
+    const MAX_KW_EACH = 8;
+    const MAX_KW_COUNT = 5;
+
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
@@ -173,15 +204,16 @@ const Knowledge = (() => {
         <h3 style="flex-shrink:0;">编辑知识</h3>
         <div style="flex:1; overflow-y:auto; padding-right:4px;">
           <div class="form-group">
-            <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">信息类别</label>
-            <input class="input" id="_kEditCat" value="${_escAttr(item.category || '')}" placeholder="如：个人信息、学习资料…">
+            <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">信息类别 <span class="char-count" id="_kCatCount">${(item.category || '').length}/${MAX_CATEGORY}</span></label>
+            <input class="input" id="_kEditCat" value="${_escAttr(item.category || '')}" placeholder="如：个人信息、学习资料…" maxlength="${MAX_CATEGORY}">
           </div>
           <div class="form-group">
-            <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">信息内容</label>
-            <textarea class="input" id="_kEditContent" rows="8" placeholder="输入内容…" style="resize:vertical;min-height:160px;font-family:inherit;font-size:0.88rem;line-height:1.6;width:100%;box-sizing:border-box;">${_esc(item.content || '')}</textarea>
+            <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">信息内容 <span class="char-count" id="_kContentCount">${(item.content || '').length}/${MAX_CONTENT}</span></label>
+            <textarea class="input" id="_kEditContent" rows="8" placeholder="输入内容…（最多 ${MAX_CONTENT} 字）" maxlength="${MAX_CONTENT}" style="resize:vertical;min-height:160px;font-family:inherit;font-size:0.88rem;line-height:1.6;width:100%;box-sizing:border-box;">${_esc(item.content || '')}</textarea>
+            <div style="font-size:0.72rem;color:var(--text-tip);margin-top:2px;">类别 + 内容 + 关键词总长限 250 token，超长后台自动截断</div>
           </div>
           <div class="form-group">
-            <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">关键词（逗号分隔）</label>
+            <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">关键词（逗号分隔，每词≤${MAX_KW_EACH}字，最多${MAX_KW_COUNT}个） <span class="char-count" id="_kKwCount">${(item.keywords || []).length}/${MAX_KW_COUNT}</span></label>
             <input class="input" id="_kEditKw" value="${_escAttr(kw)}" placeholder="关键词1, 关键词2">
           </div>
           ${item.source_file ? `<div class="form-group"><label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">来源文件</label><p style="font-size:0.8rem;color:var(--text-tip);margin:0;">${_esc(item.source_file)}</p></div>` : ''}
@@ -195,30 +227,68 @@ const Knowledge = (() => {
 
     const close = () => overlay.remove();
 
+    // 实时字数更新
+    const catInput = overlay.querySelector('#_kEditCat');
+    const contentInput = overlay.querySelector('#_kEditContent');
+    const kwInput = overlay.querySelector('#_kEditKw');
+    const catCount = overlay.querySelector('#_kCatCount');
+    const contentCount = overlay.querySelector('#_kContentCount');
+    const kwCount = overlay.querySelector('#_kKwCount');
+
+    catInput?.addEventListener('input', () => {
+      const len = catInput.value.length;
+      catCount.textContent = `${len}/${MAX_CATEGORY}`;
+      catCount.style.color = len > MAX_CATEGORY ? 'var(--color-error)' : '';
+    });
+    contentInput?.addEventListener('input', () => {
+      const len = contentInput.value.length;
+      contentCount.textContent = `${len}/${MAX_CONTENT}`;
+      contentCount.style.color = len > MAX_CONTENT ? 'var(--color-error)' : '';
+    });
+    kwInput?.addEventListener('input', () => {
+      const kws = kwInput.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+      kwCount.textContent = `${kws.length}/${MAX_KW_COUNT}`;
+      kwCount.style.color = kws.length > MAX_KW_COUNT ? 'var(--color-error)' : '';
+    });
+
     overlay.querySelector('#_kEditCancel').onclick = close;
-    overlay.querySelector('#_kEditSave').onclick = async () => {
-      const catEl = document.getElementById('_kEditCat');
-      const contentEl = document.getElementById('_kEditContent');
-      const kwEl = document.getElementById('_kEditKw');
-      if (!contentEl) return;
-      try {
-        const data = { content: contentEl.value };
-        if (catEl) data.category = catEl.value.trim();
-        if (kwEl) {
-          data.keywords = kwEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-        }
-        await knowledgeAPI.updateInfo(item.id, data);
-        close();
+    overlay.querySelector('#_kEditSave').onclick = () => {
+      if (!contentInput) return;
+
+      const catVal = (catInput?.value || '').trim();
+      const contentVal = contentInput.value;
+      if (!contentVal.trim()) {
+        if (typeof App !== 'undefined' && App.showToast) App.showToast('内容不能为空', 'warning');
+        return;
+      }
+
+      let kws = (kwInput?.value || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
+      kws = kws.map(k => k.length > MAX_KW_EACH ? k.slice(0, MAX_KW_EACH) : k);
+      kws = kws.slice(0, MAX_KW_COUNT);
+      kws = [...new Set(kws)];
+
+      const data = { content: contentVal.slice(0, MAX_CONTENT) };
+      if (catVal) data.category = catVal.slice(0, MAX_CATEGORY);
+      data.keywords = kws;
+
+      // 先关弹窗，还用户自由
+      close();
+      if (typeof App !== 'undefined' && App.showToast) {
+        App.showToast('正在保存并生成向量，请勿关闭软件…', 'info');
+      }
+
+      // 后台保存
+      knowledgeAPI.updateInfo(item.id, data).then(async () => {
         await _loadItems();
         _render();
         if (typeof App !== 'undefined' && App.showToast) {
-          App.showToast('已保存', 'success');
+          App.showToast('已保存，向量已更新', 'success');
         }
-      } catch (e) {
+      }).catch(e => {
         if (typeof App !== 'undefined' && App.showToast) {
           App.showToast('保存失败: ' + (e.message || ''), 'error');
         }
-      }
+      });
     };
 
     overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
@@ -254,6 +324,10 @@ const Knowledge = (() => {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
           ${_uploading ? 'AI 提取中…' : 'AI 导入'}
         </button>
+        <button class="btn btn-ghost btn-sm" id="kSyncBtn" title="检查并修复向量同步">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          同步
+        </button>
         <div class="knowledge-tabs">
           <button class="knowledge-tab ${_view === 'visible' ? 'active' : ''}" data-view="visible">显式知识</button>
           <button class="knowledge-tab ${_view === 'hidden' ? 'active' : ''}" data-view="hidden">隐藏知识</button>
@@ -270,8 +344,9 @@ const Knowledge = (() => {
 
   function _renderTips() {
     return `<div class="knowledge-tips">
-      <div class="knowledge-tips-item">如果某个知识命中率太低，可以试着自己编辑多写一点关键词</div>
-      <div class="knowledge-tips-item">搜索时匹配词尽量简短（两字最佳）；查不到就换几个词再搜；方向多时要拆分，每个方向写 4~5 个匹配词各查一次</div>
+      <div class="knowledge-tips-item">上传文件让 AI 自动提炼信息，或点击已有卡片手动编辑</div>
+      <div class="knowledge-tips-item">显式知识会被 AI 搜索引用，隐藏的知识不会出现在回答中</div>
+      <div class="knowledge-tips-item">「同步」按钮用于检查并修复搜索索引，日常无需手动操作</div>
     </div>`;
   }
 
@@ -347,6 +422,7 @@ const Knowledge = (() => {
     }
 
     el.querySelector('#kUploadBtn')?.addEventListener('click', _aiUpload);
+    el.querySelector('#kSyncBtn')?.addEventListener('click', _syncVectors);
 
     el.querySelectorAll('.knowledge-tab').forEach(btn => {
       btn.addEventListener('click', async () => {

@@ -9,7 +9,34 @@ SQLite 连接管理、建表、种子数据。
 import os
 import sqlite3
 import uuid
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger("lubia.database")
+
+# sqlite-vec 扩展（可选，安装后才加载）
+_vec_loaded = False
+
+def _load_sqlite_vec(conn: sqlite3.Connection):
+    """在每个新连接上加载 sqlite-vec 扩展。未安装时静默跳过。"""
+    global _vec_loaded
+    try:
+        import sqlite_vec
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        if not _vec_loaded:
+            _vec_loaded = True
+            logger.info("sqlite-vec 扩展加载成功")
+        return True
+    except ImportError:
+        if not _vec_loaded:
+            logger.warning("sqlite-vec 未安装，向量搜索功能不可用。请运行: pip install sqlite-vec")
+            _vec_loaded = True  # 避免重复告警
+        return False
+    except Exception as e:
+        logger.warning(f"sqlite-vec 加载失败: {e}")
+        return False
 
 # ── 数据库路径 ──
 # 默认在 backend 同级目录（项目根目录）
@@ -18,11 +45,12 @@ DB_PATH = os.getenv("LUBIA_DB_PATH", _DEFAULT_DB)
 
 
 def get_db() -> sqlite3.Connection:
-    """获取数据库连接"""
+    """获取数据库连接（自动加载 sqlite-vec 扩展）"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _load_sqlite_vec(conn)
     return conn
 
 
@@ -84,6 +112,11 @@ CREATE TABLE IF NOT EXISTS knowledge_infos (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- 知识库向量表（sqlite-vec vec0 虚拟表，需要 sqlite-vec 扩展）
+-- 如果 sqlite-vec 未加载，此建表语句会被静默跳过（不报错）
+-- +前缀 = 辅助列（存储但不参与 KNN 过滤），is_visible 通过 JOIN 主表过滤
+-- embedding float[512]: bge-small-zh-v1.5 输出维度
 """
 
 # ── 默认供应商种子数据 ──
@@ -167,12 +200,81 @@ def init_db():
         # 建表
         conn.executescript(CREATE_TABLES_SQL)
 
+        # 加载 sqlite-vec 扩展并创建向量表（扩展未安装时静默跳过）
+        if _load_sqlite_vec(conn):
+            try:
+                conn.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS vec_knowledge USING vec0(
+                        embedding float[512] distance_metric=cosine,
+                        +info_id TEXT,
+                        +is_visible INTEGER
+                    )
+                """)
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"vec0 虚拟表创建失败: {e}")
+
         # 检查是否已有数据（首次运行）
         count = conn.execute("SELECT COUNT(*) FROM providers").fetchone()[0]
         if count == 0:
             _seed_providers(conn)
 
         conn.commit()
+    finally:
+        conn.close()
+
+
+def diagnose_vector_db() -> dict:
+    """诊断向量数据库状态（供启动日志和调试用）
+
+    Returns:
+        dict with keys: vec_loaded, vec0_exists, info_count, vec_count, orphan_count
+    """
+    conn = get_db()
+    try:
+        # sqlite-vec 是否加载
+        vec_loaded = _vec_loaded
+        if not vec_loaded:
+            vec_loaded = _load_sqlite_vec(conn)
+
+        # vec0 表是否存在
+        vec0_exists = False
+        if vec_loaded:
+            try:
+                tbl = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_knowledge'"
+                ).fetchone()
+                vec0_exists = tbl is not None
+            except Exception:
+                pass
+
+        # 条数统计
+        info_count = conn.execute("SELECT COUNT(*) FROM knowledge_infos").fetchone()[0]
+        vec_count = 0
+        if vec0_exists:
+            try:
+                vec_count = conn.execute("SELECT COUNT(*) FROM vec_knowledge").fetchone()[0]
+            except Exception:
+                pass
+
+        # 孤儿向量（向量表有但主表已删的）
+        orphan_count = 0
+        if vec0_exists and vec_count > 0:
+            try:
+                orphan_count = conn.execute(
+                    """SELECT COUNT(*) FROM vec_knowledge v
+                       WHERE v.info_id NOT IN (SELECT id FROM knowledge_infos)"""
+                ).fetchone()[0]
+            except Exception:
+                pass
+
+        return {
+            "vec_loaded": vec_loaded,
+            "vec0_exists": vec0_exists,
+            "info_count": info_count,
+            "vec_count": vec_count,
+            "orphan_count": info_count - (vec_count - orphan_count),
+        }
     finally:
         conn.close()
 

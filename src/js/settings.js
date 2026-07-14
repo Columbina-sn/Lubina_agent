@@ -738,29 +738,49 @@ const Settings = (() => {
         <div style="color:var(--text-tip);font-size:0.75rem;margin-top:16px;">Tauri 2.0 + Python FastAPI</div>
       </div>
       <div class="settings-card" style="margin-top:14px;text-align:center;padding:16px;font-size:0.75rem;color:var(--text-tip);line-height:1.8;">
-        <p>编辑器内核：<a href="#" onclick="event.preventDefault();Settings.openCodeMirrorSite();" style="color:var(--primary);">CodeMirror 6</a></p>
+        <p>编辑器内核：<a href="#" onclick="event.preventDefault();Settings.openExternal('https://codemirror.net/');" style="color:var(--primary);">CodeMirror 6</a></p>
         <p>&copy; 2018–2024 Marijn Haverbeke and contributors</p>
         <p style="font-size:0.7rem;opacity:0.7;">基于 MIT 许可证使用</p>
+      </div>
+      <div class="settings-card" style="margin-top:8px;text-align:center;padding:16px;font-size:0.75rem;color:var(--text-tip);line-height:1.8;">
+        <p>向量数据库：<a href="#" onclick="event.preventDefault();Settings.openExternal('https://github.com/asg017/sqlite-vec');" style="color:var(--primary);">sqlite-vec</a></p>
+        <p>&copy; 2024–2025 Alex Garcia (asg017)</p>
+        <p style="font-size:0.7rem;opacity:0.7;">基于 MIT 许可证使用</p>
+      </div>
+      <div class="settings-card" style="margin-top:8px;text-align:center;padding:16px;font-size:0.75rem;color:var(--text-tip);line-height:1.8;">
+        <p>Embedding 模型：<a href="#" onclick="event.preventDefault();Settings.openExternal('https://huggingface.co/BAAI/bge-small-zh-v1.5');" style="color:var(--primary);">bge-small-zh-v1.5</a></p>
+        <p>&copy; BAAI (北京智源人工智能研究院)</p>
+        <p style="font-size:0.7rem;opacity:0.7;">基于 MIT 许可证使用</p>
+      </div>
+      <div class="settings-card" style="margin-top:8px;text-align:center;padding:16px;font-size:0.75rem;color:var(--text-tip);line-height:1.8;">
+        <p>Embedding 框架：<a href="#" onclick="event.preventDefault();Settings.openExternal('https://www.sbert.net/');" style="color:var(--primary);">Sentence-Transformers</a></p>
+        <p>&copy; 2019–2025 Nils Reimers and contributors</p>
+        <p style="font-size:0.7rem;opacity:0.7;">基于 Apache 2.0 许可证使用</p>
       </div>`;
   }
 
   // ===== 辅助 =====
 
-  function openCodeMirrorSite() {
+  function openExternal(url, name) {
+    name = name || '外部链接';
     _showConfirmModal(
       '打开外部链接',
-      '将使用默认浏览器打开 CodeMirror 官网（https://codemirror.net），确定继续吗？',
+      `将使用默认浏览器打开 ${name}（${url}），确定继续吗？`,
       () => {
         if (typeof Bridge !== 'undefined' && Bridge.isTauri()) {
-          Bridge.openExternal('https://codemirror.net/');
+          Bridge.openExternal(url);
         } else {
-          window.open('https://codemirror.net/', '_blank');
+          window.open(url, '_blank');
         }
         _showToast('已在默认浏览器中打开', 'info');
       },
-      '打开',   // 确认按钮文字（不是"确认删除"）
-      false     // 不用红色 accent，用主色 primary
+      '打开',
+      false
     );
+  }
+
+  function openCodeMirrorSite() {
+    openExternal('https://codemirror.net/', 'CodeMirror 官网');
   }
 
   function toggleVisible(inputId) {
@@ -813,6 +833,6 @@ const Settings = (() => {
     showAddModel, addModel, toggleModel, deleteModel,
     onThemeChange, onFontSizeInput, onMaxTurnsChange, onMaxLoopRoundsChange, restoreDefaults,
     onKbModelChange, _loadKbModelSelector,
-    openCodeMirrorSite, toggleVisible,
+    openExternal, openCodeMirrorSite, toggleVisible,
   };
 })();
