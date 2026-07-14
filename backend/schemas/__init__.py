@@ -1,1 +1,1 @@
-# Lubina Backend Schemas
+# Lubia Backend Schemas

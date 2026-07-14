@@ -1,5 +1,5 @@
 /* ============================================================
-   chat.js v6 — 对话级状态 + 错误恢复 + 消息队列
+   chat.js v7 — 对话级状态 + 错误恢复 + 消息队列 + 右键菜单 + 分支
 
    模式切换：ask / plan / auto（当前均透传用户消息到 AI）
    模型切换：从已启用的供应商中选择模型
@@ -8,16 +8,18 @@
    AI 消息使用 {info, action, warning, success, error, options} 类型
    连续 AI 消息不重复头像
 
-   v6 新特性：
-   - isGenerating / locked / abortController 移至每个对话自身
-   - 启动时检测孤儿 assistant 消息（崩溃/断网）→ 标为 error
-   - 生成期间可继续发消息 → 入队，回复完成后自动打包发送
+   v7 新特性：
+   - 输入框内容页面级持久化（切换页面再回来保留）
+   - 对话切换去重（已激活对话不重复切换）
+   - 对话右键菜单：打开/置顶/删除/创建分支
+   - 新建对话去重（已有空对话时不重复创建）
    ============================================================ */
 
 const Chat = (() => {
   let conversations = [];
   let activeConversationId = null;
   let lastRole = null;
+  let _savedInput = '';  // 页面级输入框持久化
 
   // 当前对话的模式和模型（UI 选择状态，发送时同步到 conv）
   let chatMode = 'ask';
@@ -26,14 +28,26 @@ const Chat = (() => {
 
   function mount() {
     _loadFromStorage();
-    if (conversations.length === 0) _createConversation('新对话');
+    // 首次启动（无任何对话）才自动创建；已有对话则恢复上次活跃的
+    if (conversations.length === 0) {
+      _createConversation('新对话');
+      activeConversationId = conversations[0].id;
+    } else if (!activeConversationId) {
+      // 上次活跃对话丢失（如旧数据）→ 找空对话或第一个
+      const empty = conversations.find(c => !(c.messages || []).some(m => m.role === 'user'));
+      activeConversationId = empty ? empty.id : conversations[0].id;
+    }
     _renderConversationList();
-    _switchConversation(activeConversationId || conversations[0]?.id);
+    _switchConversation(activeConversationId);
     _loadModelSelector();
     _updateToolbarState();
+    _restoreInput();
   }
 
   function destroy() {
+    // 保存输入框内容
+    const inp = document.getElementById('chatInput');
+    if (inp) _savedInput = inp.value;
     // Abort 所有正在生成的对话
     conversations.forEach(c => {
       if (c.abortController) { c.abortController.abort(); c.abortController = null; }
@@ -42,6 +56,19 @@ const Chat = (() => {
     });
     _saveToStorage();
     lastRole = null;
+  }
+
+  // ===== 输入框持久化 =====
+
+  function _restoreInput() {
+    setTimeout(() => {
+      const inp = document.getElementById('chatInput');
+      if (inp && _savedInput) {
+        inp.value = _savedInput;
+        inp.style.height = 'auto';
+        inp.style.height = Math.min(inp.scrollHeight, 140) + 'px';
+      }
+    }, 80);
   }
 
   // ===== 模式 & 模型管理 =====
@@ -144,7 +171,8 @@ const Chat = (() => {
       providerId: chatModelProviderId || '',
       mode: chatMode,
       createdAt: new Date().toISOString(),
-      // v6：每个对话自身的状态
+      pinned: false,
+      // v7：每个对话自身的状态
       isGenerating: false,
       locked: false,
       abortController: null,
@@ -169,6 +197,42 @@ const Chat = (() => {
       if (activeConversationId) _switchConversation(activeConversationId);
       else { const nc = _createConversation('新对话'); _renderConversationList(); _switchConversation(nc.id); }
     });
+  }
+
+  /** 创建分支：完全复制对话内容，新 ID，供用户向不同方向发展 */
+  function branchConversation(id) {
+    const src = conversations.find(c => c.id === id);
+    if (!src) return;
+    const conv = {
+      id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title: (src.title || '新对话') + ' (分支)',
+      messages: src.messages.map(m => ({
+        role: m.role, type: m.type, content: m.content, timestamp: m.timestamp,
+        action: m.action, options: m.options, streaming: false,
+        tool: m.tool, toolDetail: m.toolDetail, toolHuman: m.toolHuman,
+        toolResult: m.toolResult, toolResultHuman: m.toolResultHuman,
+      })),
+      model: src.model, providerId: src.providerId, mode: src.mode,
+      createdAt: new Date().toISOString(),
+      pinned: false,
+      isGenerating: false,
+      locked: (src.messages || []).some(m => m.role === 'user'),
+      abortController: null,
+      _queue: [],
+    };
+    conversations.unshift(conv);
+    _saveToStorage();
+    _renderConversationList();
+    _switchConversation(conv.id);
+  }
+
+  /** 置顶/取消置顶 */
+  function togglePinConversation(id) {
+    const conv = conversations.find(c => c.id === id);
+    if (!conv) return;
+    conv.pinned = !conv.pinned;
+    _saveToStorage();
+    _renderConversationList();
   }
 
   function _showConfirmModal(title, desc, onConfirm) {
@@ -211,6 +275,11 @@ const Chat = (() => {
   function _getActiveConversation() { return conversations.find(c => c.id === activeConversationId) || null; }
 
   function _switchConversation(id) {
+    // 已在当前对话且消息区有内容 → 不重复渲染
+    if (id === activeConversationId) {
+      const container = document.getElementById('messageContainer');
+      if (container && container.children.length > 0) return;
+    }
     activeConversationId = id; lastRole = null;
     const conv = _getActiveConversation();
     if (!conv) return;
@@ -238,7 +307,7 @@ const Chat = (() => {
     _scrollToBottom();
   }
 
-  // ===== 发送消息（v6：两路 —— 排队 / 正常发送）=====
+  // ===== 发送消息（v7：两路 —— 排队 / 正常发送）=====
 
   async function sendMessage(content) {
     if (!content?.trim()) return;
@@ -253,7 +322,7 @@ const Chat = (() => {
 
     // Plan / Auto 模式：必须有工作区
     if (chatMode === 'plan' || chatMode === 'agent') {
-      const wsRoot = window.__lubina_workspace_root;
+      const wsRoot = window.__lubia_workspace_root;
       if (!wsRoot) {
         _showWorkspaceRequiredModal();
         return;
@@ -263,6 +332,7 @@ const Chat = (() => {
     // 所有检查通过，清空输入框
     const inp = document.getElementById('chatInput');
     if (inp) { inp.value = ''; inp.style.height = 'auto'; }
+    _savedInput = '';  // 已发送，清除持久化内容
 
     // 锁定模式和模型（到当前对话）
     conv.mode = chatMode;
@@ -322,7 +392,7 @@ const Chat = (() => {
       },
       web_fetch: {
         detail: `读取网页：${args?.url || ''}`,
-        human: 'Lubina 在根据网址查询内容……',
+        human: 'Lubia 在根据网址查询内容……',
         done: '网页内容读取完成',
       },
     };
@@ -440,7 +510,6 @@ const Chat = (() => {
         },
         onDone: () => {
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
-          // _showPendingResult 不存在，已移除
           aiMsg.thinking = false;
           aiMsg.streaming = false;
           if (!aiMsg.content) {
@@ -571,7 +640,7 @@ const Chat = (() => {
       const response = await fetch(`${API_BASE}/api/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true, sandbox_root: window.__lubina_workspace_root || null }),
+        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true, sandbox_root: window.__lubia_workspace_root || null }),
         signal: controller.signal,
       });
 
@@ -794,23 +863,140 @@ const Chat = (() => {
     mdBody.innerHTML = mdContent;
   }
 
+  // ===== 对话列表渲染（v7：置顶排序 + 右键菜单 + 上下文事件委托）=====
+
+  /** 排序：置顶优先，然后按创建时间倒序 */
+  function _sortedConversations() {
+    return [...conversations].sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+  }
+
   function _renderConversationList() {
     const list = document.getElementById('conversationList');
     if (!list) return;
-    list.innerHTML = conversations.map(conv => `
-      <div class="conv-item ${conv.id === activeConversationId ? 'active' : ''}" onclick="Chat.switchTo('${conv.id}')">
+    const sorted = _sortedConversations();
+    list.innerHTML = sorted.map(conv => `
+      <div class="conv-item ${conv.id === activeConversationId ? 'active' : ''} ${conv.pinned ? 'pinned' : ''}"
+           data-conv-id="${conv.id}"
+           onclick="Chat.switchTo('${conv.id}')"
+           oncontextmenu="Chat._onConvContextMenu(event, '${conv.id}')">
         <svg class="conv-item-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        ${conv.pinned ? '<svg class="conv-pin-icon" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>' : ''}
         <span class="conv-item-title">${_esc(conv.title)}</span>
         <button class="conv-item-delete" onclick="event.stopPropagation();Chat.deleteConversation('${conv.id}')" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
     `).join('');
   }
 
+  /** 对话右键菜单 */
+  function _onConvContextMenu(e, convId) {
+    e.preventDefault();
+    e.stopPropagation();
+    const conv = conversations.find(c => c.id === convId);
+    if (!conv) return;
+    const isActive = convId === activeConversationId;
+
+    // 移除旧菜单
+    const old = document.querySelector('.conv-context-menu');
+    if (old) old.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'conv-context-menu';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+
+    const items = [];
+    // 打开（已激活的不显示也不响应）
+    if (!isActive) {
+      items.push(`<div class="conv-ctx-item" data-action="open">打开</div>`);
+    }
+    // 重命名
+    items.push(`<div class="conv-ctx-item" data-action="rename">重命名</div>`);
+    // 置顶/取消置顶
+    items.push(`<div class="conv-ctx-item" data-action="pin">${conv.pinned ? '取消置顶' : '置顶'}</div>`);
+    // 创建分支
+    items.push(`<div class="conv-ctx-item" data-action="branch">创建分支</div>`);
+    // 删除
+    items.push(`<div class="conv-ctx-item conv-ctx-danger" data-action="delete">删除</div>`);
+
+    menu.innerHTML = items.join('');
+    document.body.appendChild(menu);
+
+    // 点击事件
+    menu.querySelectorAll('.conv-ctx-item').forEach(item => {
+      item.onclick = () => {
+        const action = item.dataset.action;
+        menu.remove();
+        if (action === 'open') _switchConversation(convId);
+        if (action === 'rename') _renameConversation(convId);
+        if (action === 'pin') togglePinConversation(convId);
+        if (action === 'branch') branchConversation(convId);
+        if (action === 'delete') deleteConversation(convId);
+      };
+    });
+
+    // 点击外部关闭
+    const close = (ev) => {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); document.removeEventListener('keydown', escClose); }
+    };
+    const escClose = (ev) => { if (ev.key === 'Escape') { menu.remove(); document.removeEventListener('click', close); document.removeEventListener('keydown', escClose); } };
+    setTimeout(() => { document.addEventListener('click', close); document.addEventListener('keydown', escClose); }, 0);
+  }
+
+  /** 重命名对话 */
+  function _renameConversation(id) {
+    const conv = conversations.find(c => c.id === id);
+    if (!conv) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-dialog" style="max-width:360px;">
+        <h3>重命名对话</h3>
+        <input class="input" id="_renameInput" value="${_escAttr(conv.title || '')}" placeholder="输入新名称" style="width:100%;box-sizing:border-box;margin:8px 0;">
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="_renameCancel">取消</button>
+          <button class="btn btn-primary" id="_renameConfirm">确认</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('#_renameCancel').onclick = close;
+    overlay.querySelector('#_renameConfirm').onclick = () => {
+      const inp = document.getElementById('_renameInput');
+      const name = (inp?.value || '').trim();
+      if (name) {
+        conv.title = name;
+        _saveToStorage();
+        _renderConversationList();
+      }
+      close();
+    };
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+      if (e.key === 'Enter') {
+        const inp = document.getElementById('_renameInput');
+        if (inp && document.activeElement === inp) {
+          overlay.querySelector('#_renameConfirm').click();
+        }
+      }
+    });
+    setTimeout(() => {
+      const inp = document.getElementById('_renameInput');
+      if (inp) { inp.focus(); inp.select(); }
+    }, 80);
+  }
+
   function _welcomeHTML() {
     return `<div class="welcome-screen">
-      <img class="welcome-logo" src="/Lubina.svg" alt="Lubina" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="width:64px;height:64px;border-radius:18px;object-fit:contain;background:var(--primary-gradient);padding:10px;box-shadow:0 6px 24px var(--primary-glow);animation:floatLogo 3s ease-in-out infinite;">
+      <img class="welcome-logo" src="/Lubia.svg" alt="Lubia" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="width:64px;height:64px;border-radius:18px;object-fit:contain;background:var(--primary-gradient);padding:10px;box-shadow:0 6px 24px var(--primary-glow);animation:floatLogo 3s ease-in-out infinite;">
       <div class="welcome-logo" style="display:none;">AI</div>
-      <h2>Lubina</h2>
+      <h2>Lubia</h2>
       <p>你的桌面学习伙伴</p>
     </div>`;
   }
@@ -844,7 +1030,7 @@ const Chat = (() => {
 
   function _loadFromStorage() {
     try {
-      const d = localStorage.getItem('lubina_conversations');
+      const d = localStorage.getItem('lubia_conversations');
       if (d) {
         conversations = JSON.parse(d);
         conversations.forEach(c => {
@@ -852,6 +1038,7 @@ const Chat = (() => {
           // v6：为旧数据补充缺失字段
           if (c.isGenerating === undefined) c.isGenerating = false;
           if (c.locked === undefined) c.locked = (c.messages || []).some(m => m.role === 'user');
+          if (c.pinned === undefined) c.pinned = false;
           c.abortController = null;
           c._queue = [];
           // v6：错误恢复 —— 空内容的 assistant 消息标为 error
@@ -863,7 +1050,8 @@ const Chat = (() => {
             }
           });
         });
-        if (conversations.length > 0) activeConversationId = conversations[0].id;
+        // 只在当前会话还没选中对话时才恢复（保留页面切换间的状态）
+        if (!activeConversationId && conversations.length > 0) activeConversationId = conversations[0].id;
       }
     } catch (_) { conversations = []; }
   }
@@ -872,7 +1060,8 @@ const Chat = (() => {
     try {
       const cleaned = conversations.map(function (c) {
         return {
-          id: c.id, title: c.title, model: c.model, providerId: c.providerId, mode: c.mode, createdAt: c.createdAt,
+          id: c.id, title: c.title, model: c.model, providerId: c.providerId,
+          mode: c.mode, createdAt: c.createdAt, pinned: c.pinned,
           messages: c.messages.map(function (m) {
             return {
               role: m.role, type: m.type, content: m.content, timestamp: m.timestamp,
@@ -882,7 +1071,7 @@ const Chat = (() => {
           })
         };
       });
-      localStorage.setItem('lubina_conversations', JSON.stringify(cleaned));
+      localStorage.setItem('lubia_conversations', JSON.stringify(cleaned));
     } catch (_) { }
   }
 
@@ -898,6 +1087,9 @@ const Chat = (() => {
     },
     switchTo: _switchConversation,
     deleteConversation,
+    branchConversation,
+    togglePinConversation,
+    _onConvContextMenu,  // 供 oncontextmenu 调用
     newConversation: () => {
       // 如果已有空对话（没发过消息），直接切过去，不重复创建
       const empty = conversations.find(c => !(c.messages || []).some(m => m.role === 'user'));

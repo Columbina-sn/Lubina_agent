@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Lubina",
+  "productName": "Lubia",
   "version": "0.1.0",
-  "identifier": "com.lubina.app",
+  "identifier": "com.lubia.app",
   "build": {
     "frontendDist": "../src",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Lubina",
+        "title": "Lubia",
         "width": 1200,
         "height": 800,
         "minWidth": 900,

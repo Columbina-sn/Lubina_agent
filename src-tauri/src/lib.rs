@@ -82,7 +82,7 @@ pub fn run() {
             // ═══════════════════════════════════════
             // 第 2 步：启动 Python 后端
             // ═══════════════════════════════════════
-            println!("[Lubina] 正在启动 Python 后端...");
+            println!("[Lubia] 正在启动 Python 后端...");
 
             let child = Command::new("python")
                 .current_dir(project_root())
@@ -93,9 +93,9 @@ pub fn run() {
                     "--port", "19800",
                 ])
                 .spawn()
-                .expect("[Lubina] 无法启动 Python 后端，请确认 Python 已安装");
+                .expect("[Lubia] 无法启动 Python 后端，请确认 Python 已安装");
 
-            println!("[Lubina] Python 后端已启动 (PID: {})", child.id());
+            println!("[Lubia] Python 后端已启动 (PID: {})", child.id());
 
             // 存入 Tauri 状态管理器
             app.manage(PythonBackend(Mutex::new(Some(child))));
@@ -128,10 +128,10 @@ pub fn run() {
                 let state = app.state::<PythonBackend>();
                 let child_opt = state.0.lock().unwrap().take();
                 if let Some(mut child) = child_opt {
-                    println!("[Lubina] 正在关闭 Python 后端...");
+                    println!("[Lubia] 正在关闭 Python 后端...");
                     let _ = child.kill();
                     let _ = child.wait();
-                    println!("[Lubina] Python 后端已关闭");
+                    println!("[Lubia] Python 后端已关闭");
                 }
             }
         });
@@ -158,7 +158,7 @@ fn cleanup_orphan_processes() {
                     if *pid == "0" {
                         continue;
                     }
-                    println!("[Lubina] 清理孤儿进程 PID={}", pid);
+                    println!("[Lubia] 清理孤儿进程 PID={}", pid);
                     let _ = Command::new("taskkill")
                         .args(["/F", "/PID", pid])
                         .output();
@@ -183,11 +183,11 @@ fn wait_for_backend() {
             if out.status.success() {
                 let body = String::from_utf8_lossy(&out.stdout);
                 if body.contains("\"code\":200") {
-                    println!("[Lubina] 后端就绪 ({}ms)", (i + 1) * 500);
+                    println!("[Lubia] 后端就绪 ({}ms)", (i + 1) * 500);
                     return;
                 }
             }
         }
     }
-    println!("[Lubina] 警告：后端在 15 秒内未就绪，继续启动窗口");
+    println!("[Lubia] 警告：后端在 15 秒内未就绪，继续启动窗口");
 }

@@ -166,10 +166,10 @@ const Settings = (() => {
   // ── 偏好选项 ──
 
   function _renderPreferences(container) {
-    const theme = localStorage.getItem('lubina_theme') || 'auto';
-    const maxTurns = localStorage.getItem('lubina_max_turns') || '15';
-    const maxLoopRounds = localStorage.getItem('lubina_max_loop_rounds') || '8';
-    const fontSize = localStorage.getItem('lubina_font_size') || '1.0';
+    const theme = localStorage.getItem('lubia_theme') || 'auto';
+    const maxTurns = localStorage.getItem('lubia_max_turns') || '15';
+    const maxLoopRounds = localStorage.getItem('lubia_max_loop_rounds') || '8';
+    const fontSize = localStorage.getItem('lubia_font_size') || '1.0';
 
     container.innerHTML = `
       <div class="settings-section-header">
@@ -227,33 +227,33 @@ const Settings = (() => {
   // ── 偏好选项即时生效 ──
 
   function onThemeChange(value) {
-    localStorage.setItem('lubina_theme', value);
+    localStorage.setItem('lubia_theme', value);
     if (typeof App !== 'undefined') App.applyTheme(value);
   }
 
   function onFontSizeInput(value) {
     document.getElementById('fontSizeValue').textContent = value + 'x';
     if (typeof App !== 'undefined') App.applyFontSize(parseFloat(value));
-    localStorage.setItem('lubina_font_size', value);
+    localStorage.setItem('lubia_font_size', value);
   }
 
   function onMaxTurnsChange(value) {
     const v = Math.max(10, Math.min(30, parseInt(value) || 15));
-    localStorage.setItem('lubina_max_turns', v);
+    localStorage.setItem('lubia_max_turns', v);
     configAPI.set('max_turns', String(v)).catch(() => {});
   }
 
   function onMaxLoopRoundsChange(value) {
     const v = Math.max(5, Math.min(20, parseInt(value) || 8));
-    localStorage.setItem('lubina_max_loop_rounds', v);
+    localStorage.setItem('lubia_max_loop_rounds', v);
     configAPI.set('max_loop_rounds', String(v)).catch(() => {});
   }
 
   function restoreDefaults() {
-    localStorage.setItem('lubina_theme', 'auto');
-    localStorage.setItem('lubina_font_size', '1.0');
-    localStorage.setItem('lubina_max_turns', '15');
-    localStorage.setItem('lubina_max_loop_rounds', '8');
+    localStorage.setItem('lubia_theme', 'auto');
+    localStorage.setItem('lubia_font_size', '1.0');
+    localStorage.setItem('lubia_max_turns', '15');
+    localStorage.setItem('lubia_max_loop_rounds', '8');
     configAPI.set('max_turns', '15').catch(() => {});
     configAPI.set('max_loop_rounds', '8').catch(() => {});
     if (typeof App !== 'undefined') {
@@ -732,7 +732,7 @@ const Settings = (() => {
     container.innerHTML = `
       <div class="settings-section-header"><h3>关于</h3></div>
       <div class="settings-card" style="text-align:center;padding:30px;">
-        <div style="font-size:1.2rem;font-weight:700;color:var(--text-h1);margin-bottom:6px;">Lubina</div>
+        <div style="font-size:1.2rem;font-weight:700;color:var(--text-h1);margin-bottom:6px;">Lubia</div>
         <div style="color:var(--text-sub);">版本 0.2.0</div>
         <div style="color:var(--text-tip);font-size:0.8rem;margin-top:6px;">桌面 AI 学习伙伴</div>
         <div style="color:var(--text-tip);font-size:0.75rem;margin-top:16px;">Tauri 2.0 + Python FastAPI</div>

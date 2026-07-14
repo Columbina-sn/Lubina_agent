@@ -1,4 +1,4 @@
-"""Lubina 后端配置
+"""Lubia 后端配置
 
 所有配置项都可以通过环境变量覆盖。
 桌面应用场景：127.0.0.1 绑定，不对外暴露端口。
@@ -13,9 +13,9 @@ _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
 
 # ── 服务器 ──
-HOST = os.getenv("LUBINA_HOST", "127.0.0.1")       # 只监听本机，安全
-PORT = int(os.getenv("LUBINA_PORT", "19800"))       # 前端 api.js 的 API_BASE 与此一致
-DEBUG = os.getenv("LUBINA_DEBUG", "true").lower() == "true"
+HOST = os.getenv("LUBIA_HOST", "127.0.0.1")       # 只监听本机，安全
+PORT = int(os.getenv("LUBIA_PORT", "19800"))       # 前端 api.js 的 API_BASE 与此一致
+DEBUG = os.getenv("LUBIA_DEBUG", "true").lower() == "true"
 
 # ── 第三方 API Keys ──
 # 百度 AI 搜索（千帆平台）

@@ -1,8 +1,8 @@
 [package]
-name = "lubina"
+name = "lubia"
 version = "0.1.0"
-description = "Lubina - 桌面学习伙伴"
-authors = ["Lubina Team"]
+description = "Lubia - 桌面学习伙伴"
+authors = ["Lubia Team"]
 license = "MIT"
 repository = ""
 edition = "2021"

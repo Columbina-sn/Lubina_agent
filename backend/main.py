@@ -1,4 +1,4 @@
-"""Lubina 后端入口
+"""Lubia 后端入口
 
 启动方式（从项目根目录）:
     uvicorn backend.main:app --reload --port 19800
@@ -33,9 +33,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Lubina Backend",
+    title="Lubia Backend",
     version="0.2.0",
-    description="Lubina 桌面 AI 助手后端服务 —— 运行在 127.0.0.1，不对外暴露",
+    description="Lubia 桌面 AI 助手后端服务 —— 运行在 127.0.0.1，不对外暴露",
     lifespan=lifespan,
 )
 

@@ -2,7 +2,7 @@
 
 POST /api/chat/completions
   所有模式（ask/plan/agent）统一经过 Re-Act 循环：
-  构建 System Prompt（Lubina 身份 + 工具列表）→ AI 返回 text 或 tool_call →
+  构建 System Prompt（Lubia 身份 + 工具列表）→ AI 返回 text 或 tool_call →
   执行工具 → 追加结果 → 继续循环 → 流式返回最终答案。
 
 SSE 事件类型：
@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 async def chat_completions(req: ChatRequest):
     """聊天接口 — 通过 Re-Act 循环处理所有对话模式
 
-    系统提示词包含 Lubina 身份说明和三个工具（知识库检索/联网搜索/网页抓取）。
+    系统提示词包含 Lubia 身份说明和三个工具（知识库检索/联网搜索/网页抓取）。
     AI 会自动判断是否需要调用工具，无需前端干预。
     """
     # 1. 验证供应商

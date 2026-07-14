@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 
 class ApiResponse(BaseModel):
-    """Lubina 后端统一响应"""
+    """Lubia 后端统一响应"""
     code: int = 200                  # 200=成功，非200=错误（对齐 HTTP 状态码语义）
     message: str = "ok"              # 人类可读的提示信息
     data: Optional[Any] = None       # 实际数据，失败时为 null

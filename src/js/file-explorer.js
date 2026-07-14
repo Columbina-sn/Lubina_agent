@@ -87,14 +87,14 @@ const FileExplorer = (() => {
       const result = await Bridge.openFolderDialog();
       if (result) {
         rootPath = typeof result === 'string' ? result : result.path || result;
-        window.__lubina_workspace_root = rootPath;
+        window.__lubia_workspace_root = rootPath;
         loadedDirs = new Set();
         // 安全检查：首次打开的文件夹需用户确认信任
         const trusted = await _checkFolderTrust(rootPath);
         if (!trusted) {
           // 用户选择退出：清空工作区状态
           rootPath = null;
-          window.__lubina_workspace_root = null;
+          window.__lubia_workspace_root = null;
           treeData = null;
           renderTree();
           return;
@@ -102,7 +102,7 @@ const FileExplorer = (() => {
         await loadDirectory(rootPath);
       }
     } else {
-      showToast('请使用 Lubina 桌面版打开文件夹', 'warning');
+      showToast('请使用 Lubia 桌面版打开文件夹', 'warning');
     }
   }
 
@@ -399,7 +399,7 @@ const FileExplorer = (() => {
 	    if (typeof Bridge !== 'undefined' && Bridge.isTauri()) {
 	      Bridge.openExternal(node.path);
 	    } else {
-	      showToast('请使用 Lubina 桌面版在浏览器中打开文件', 'warning');
+	      showToast('请使用 Lubia 桌面版在浏览器中打开文件', 'warning');
 	    }
 	  }
 	
@@ -420,7 +420,7 @@ const FileExplorer = (() => {
   /** 读取已信任的文件夹列表（路径标准化后存储） */
   function _getTrustedFolders() {
     try {
-      return JSON.parse(localStorage.getItem('lubina_trusted_folders') || '[]');
+      return JSON.parse(localStorage.getItem('lubia_trusted_folders') || '[]');
     } catch (_) { return []; }
   }
 
@@ -450,7 +450,7 @@ const FileExplorer = (() => {
           <div style="font-size:0.82rem;color:var(--text-sub);line-height:1.7;">
             <p style="margin:0 0 10px;">快速安全检查：这是你自己创建的项目，还是你信任的项目？<br>（例如你自己的代码、知名的开源项目或团队的工作成果）。如果不是，请先花点时间查看此文件夹中的内容。</p>
             <p style="margin:0 0 6px;word-break:break-all;color:var(--text-body);background:var(--bg-input);padding:4px 8px;border-radius:4px;font-family:monospace;font-size:0.78rem;">${folderPath}</p>
-            <p style="margin:0 0 10px;font-size:0.78rem;">Lubina 将能够在此处读取、编辑和执行文件。</p>
+            <p style="margin:0 0 10px;font-size:0.78rem;">Lubia 将能够在此处读取、编辑和执行文件。</p>
             <p style="margin:0;"><a href="javascript:void(0)" style="color:var(--info);text-decoration:underline;">安全指南</a>&nbsp;<span style="color:var(--text-tip);font-size:0.7rem;">（即将上线）</span></p>
           </div>
           <div class="modal-actions" style="margin-top:16px;">
@@ -466,7 +466,7 @@ const FileExplorer = (() => {
       overlay.querySelector('#trustModalTrust').onclick = () => {
         // 加入受信列表
         trusted.push(folderPath);
-        try { localStorage.setItem('lubina_trusted_folders', JSON.stringify(trusted)); } catch (_) {}
+        try { localStorage.setItem('lubia_trusted_folders', JSON.stringify(trusted)); } catch (_) {}
         cleanup(); resolve(true);
       };
       overlay.addEventListener('click', (e) => { if (e.target === overlay) { cleanup(); resolve(false); } });
@@ -485,12 +485,12 @@ const FileExplorer = (() => {
     /** 编程式设置工作区（也需安全检查） */
     setWorkspace: async (dirPath) => {
       rootPath = dirPath;
-      window.__lubina_workspace_root = dirPath;
+      window.__lubia_workspace_root = dirPath;
       loadedDirs = new Set();
       const trusted = await _checkFolderTrust(dirPath);
       if (!trusted) {
         rootPath = null;
-        window.__lubina_workspace_root = null;
+        window.__lubia_workspace_root = null;
         treeData = null;
         renderTree();
         return;

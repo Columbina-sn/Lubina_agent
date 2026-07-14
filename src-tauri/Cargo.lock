@@ -1848,7 +1848,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lubina"
+name = "lubia"
 version = "0.1.0"
 dependencies = [
  "log",

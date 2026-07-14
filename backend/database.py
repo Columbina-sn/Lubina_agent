@@ -1,8 +1,8 @@
-"""Lubina 数据库层
+"""Lubia 数据库层
 
 SQLite 连接管理、建表、种子数据。
-数据库文件路径通过环境变量 LUBINA_DB_PATH 控制：
-  - 开发：项目根目录 lubina_dev.db
+数据库文件路径通过环境变量 LUBIA_DB_PATH 控制：
+  - 开发：项目根目录 lubia_dev.db
   - 生产：用户数据目录（由 Rust 传入）
 """
 
@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 
 # ── 数据库路径 ──
 # 默认在 backend 同级目录（项目根目录）
-_DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lubina_dev.db")
-DB_PATH = os.getenv("LUBINA_DB_PATH", _DEFAULT_DB)
+_DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lubia_dev.db")
+DB_PATH = os.getenv("LUBIA_DB_PATH", _DEFAULT_DB)
 
 
 def get_db() -> sqlite3.Connection:

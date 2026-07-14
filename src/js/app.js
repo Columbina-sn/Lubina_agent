@@ -12,11 +12,11 @@ const App = (() => {
   let els = {};
 
   // 全局工作区根目录（file-explorer.js 打开文件夹时设置，chat.js 发送前校验）
-  window.__lubina_workspace_root = null;
+  window.__lubia_workspace_root = null;
 
   /** 安全校验：检查文件路径是否在工作区内 */
   function isPathInWorkspace(filePath) {
-    const root = window.__lubina_workspace_root;
+    const root = window.__lubia_workspace_root;
     if (!root) return false;
     // 统一分隔符为 / 并小写比较
     const normalized = filePath.replace(/\\/g, '/').toLowerCase();
@@ -51,7 +51,7 @@ const App = (() => {
 
   // ===== 主题 =====
   function restoreTheme() {
-    const s = localStorage.getItem('lubina_theme') || 'auto';
+    const s = localStorage.getItem('lubia_theme') || 'auto';
     applyTheme(s);
   }
   function applyTheme(v) {
@@ -59,12 +59,12 @@ const App = (() => {
     if (v === 'auto') document.documentElement.setAttribute('data-theme', window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
     else if (v === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
     else document.documentElement.removeAttribute('data-theme');
-    localStorage.setItem('lubina_theme', v);
+    localStorage.setItem('lubia_theme', v);
   }
 
   // ===== 字体大小 =====
   function restoreFontSize() {
-    const s = localStorage.getItem('lubina_font_size') || '1.0';
+    const s = localStorage.getItem('lubia_font_size') || '1.0';
     applyFontSize(parseFloat(s));
   }
   function applyFontSize(scale) {
@@ -330,7 +330,7 @@ const App = (() => {
                 </div>
                 <select class="chat-model-select" id="chatModelSelect"></select>
               </div>
-              <p class="chat-input-hint">Lubina · 内容由AI生成请注意甄别、审计</p>
+              <p class="chat-input-hint">Lubia · 内容由AI生成请注意甄别、审计</p>
             </div>
           </div></div>`;
       case 'editor': {
@@ -445,7 +445,7 @@ const App = (() => {
 
     // 占位：后续接入真实认证
     const user = { email, name: email.split('@')[0] };
-    localStorage.setItem('lubina_user', JSON.stringify(user));
+    localStorage.setItem('lubia_user', JSON.stringify(user));
     updateAvatarUI(user);
     closeLoginModal();
     showToast('已登录（本地模拟）', 'info');
@@ -454,14 +454,14 @@ const App = (() => {
   function logout() {
     const dd = document.getElementById('avatarDropdown');
     if (dd) dd.classList.remove('visible');
-    localStorage.removeItem('lubina_user');
+    localStorage.removeItem('lubia_user');
     updateAvatarUI(null);
     showToast('已退出登录', 'info');
   }
 
   function restoreLoginState() {
     try {
-      const raw = localStorage.getItem('lubina_user');
+      const raw = localStorage.getItem('lubia_user');
       if (raw) updateAvatarUI(JSON.parse(raw));
       else updateAvatarUI(null);
     } catch (_) { updateAvatarUI(null); }
