@@ -41,30 +41,27 @@ def _now_iso() -> str:
 _MAX_KNOWLEDGE_TOKENS = 250
 
 
-def _validate_knowledge_length(category: str, content: str, keywords: list) -> Optional[str]:
-    """检查知识条目总长度是否超限。返回错误消息，None 表示通过。"""
-    from ..services.embedding_service import EMBED_TEMPLATE
-    kw_str = ", ".join(keywords) if keywords else ""
-    full = EMBED_TEMPLATE.format(category=category or "", content=content or "", keywords=kw_str)
+def _validate_knowledge_length(content: str) -> Optional[str]:
+    """检查内容长度是否超 250 token。返回错误消息，None 表示通过。"""
     try:
         from ..services.embedding_service import get_embedding_service
         svc = get_embedding_service()
-        tokens = svc._count_tokens(full)
+        tokens = svc._count_tokens(content)
     except Exception:
-        tokens = len(full)
+        tokens = len(content)
     if tokens > _MAX_KNOWLEDGE_TOKENS:
-        return f"知识条目总长度 {tokens} token，超出上限 {_MAX_KNOWLEDGE_TOKENS}。请精简类别、内容或关键词。"
+        return f"内容长度 {tokens} token，超出上限 {_MAX_KNOWLEDGE_TOKENS}。请精简内容。"
     return None
 
 
-def _embed_info_item(category: str, content: str, keywords: list) -> Optional[bytes]:
+def _embed_info_item(content: str) -> Optional[bytes]:
     """为知识条目生成向量 BLOB（失败返回 None）"""
     try:
         from ..services.embedding_service import get_embedding_service
         svc = get_embedding_service()
         if not svc.is_available:
             return None
-        vec = svc.embed_knowledge(category, content, keywords)
+        vec = svc.embed_content(content)
         if vec is None:
             return None
         from sqlite_vec import serialize_float32
@@ -352,7 +349,7 @@ async def update_info(info_id: str, data: InfoUpdate):
             merged_kw = []
         if data.keywords is not None:
             merged_kw = data.keywords
-        err = _validate_knowledge_length(merged_cat, merged_content, merged_kw)
+        err = _validate_knowledge_length(merged_content)
         if err:
             return fail(message=err, code=422)
 
@@ -381,7 +378,7 @@ async def update_info(info_id: str, data: InfoUpdate):
                 kw = []
             cat = new_row["category"] or ""
             content = new_row["content"] or ""
-            vec_blob = _embed_info_item(cat, content, kw)
+            vec_blob = _embed_info_item(content)
             if vec_blob is not None:
                 try:
                     conn.execute("DELETE FROM vec_knowledge WHERE info_id = ?", (info_id,))
@@ -465,11 +462,7 @@ async def sync_vectors():
 
         added, failed = 0, 0
         for row in missing:
-            try:
-                kw = json.loads(row["keywords"] or "[]")
-            except (json.JSONDecodeError, TypeError):
-                kw = []
-            vec = svc.embed_knowledge(row["category"] or "", row["content"] or "", kw)
+            vec = svc.embed_content(row["content"] or "")
             if vec is None:
                 failed += 1
                 continue

@@ -2,17 +2,14 @@
 
 职责：
 1. 单例加载 SentenceTransformer 模型，避免每次请求重载
-2. 知识条目 embedding：{category} | {content} | 关键词: {kw1, kw2, ...}
-   （文档侧不加检索前缀）
-3. 查询 embedding：检索前缀 + 用户原始查询
-   （查询侧自动加前缀）
-4. 超长截断保护：拼接后 token > 480 则按比例截断 content
+2. embed_content()：只编码纯文本，不加模板、不加检索前缀
+   — 存储和检索统一用此方法，向量只看内容本身
+3. 超长截断保护：超过 250 token 自动截断
 
 使用方式：
   from .embedding_service import get_embedding_service
   svc = get_embedding_service()
-  vec = svc.embed_knowledge("个人信息", "用户就读于清华", ["学校", "学历"])
-  vec = svc.embed_query("用户在哪里上学")
+  vec = svc.embed_content("用户就读于清华大学计算机系")
 """
 
 import logging
@@ -35,11 +32,7 @@ if _os.path.isdir(_LOCAL_MODEL) and _os.path.isfile(_os.path.join(_LOCAL_MODEL, 
     _MODEL_NAME = _LOCAL_MODEL  # 用本地模型，无需联网
 
 _VEC_DIM = 512  # 向量维度
-_MAX_TOKENS = 250  # 知识条目总 token 上限（category + content + keywords 合计）
-_QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
-
-# 拼接模板（供外部验证长度使用）
-EMBED_TEMPLATE = "{category} | {content} | 关键词: {keywords}"
+_MAX_TOKENS = 250  # 内容 token 上限
 
 # 全局单例
 _service: Optional["EmbeddingService"] = None
@@ -132,18 +125,14 @@ class EmbeddingService:
 
     # ── 公开 API ──
 
-    def embed_knowledge(
-        self,
-        category: str = "",
-        content: str = "",
-        keywords: List[str] = None,
-    ) -> Optional[List[float]]:
-        """对知识条目做 embedding（文档侧，不加检索前缀）
+    def embed_content(self, text: str) -> Optional[List[float]]:
+        """只编码纯文本，不加模板、不加检索前缀。
+
+        存储和检索统一用此方法——向量只看内容本身，
+        不看分类和关键词（那些是给 SQL LIKE 搜索用的结构化标签）。
 
         Args:
-            category: 信息类别
-            content:  信息内容
-            keywords: 关键词列表
+            text: 纯文本内容（知识条目内容 / 查询文本）
 
         Returns:
             512 维 float 列表（L2 归一化），失败返回 None
@@ -152,30 +141,10 @@ class EmbeddingService:
         if not self._loaded:
             return None
 
-        kw_str = ", ".join(keywords) if keywords else ""
-        text = EMBED_TEMPLATE.format(
-            category=category or "",
-            content=content or "",
-            keywords=kw_str,
-        )
-
         # 截断保护
         token_count = self._count_tokens(text)
         if token_count > _MAX_TOKENS:
-            # 计算 content 需要缩减多少
-            template_without_content = EMBED_TEMPLATE.format(
-                category=category or "", content="", keywords=kw_str,
-            )
-            template_tokens = self._count_tokens(template_without_content)
-            available = _MAX_TOKENS - template_tokens
-            if available > 10:
-                truncated = self._truncate_content(content or "", available)
-                text = EMBED_TEMPLATE.format(
-                    category=category or "", content=truncated, keywords=kw_str,
-                )
-            else:
-                # 模板本身就超了 → 只取 category + 截断 content，不放关键词
-                text = self._truncate_content(f"{category} | {content}", _MAX_TOKENS)
+            text = self._truncate_content(text, _MAX_TOKENS)
 
         try:
             emb = self._model.encode(
@@ -186,41 +155,4 @@ class EmbeddingService:
             return emb.tolist()
         except Exception as e:
             logger.error(f"Embedding 失败: {e}")
-            return None
-
-    def embed_query(self, query: str) -> Optional[List[float]]:
-        """对查询文本做 embedding（查询侧，加检索前缀）
-
-        Args:
-            query: 用户查询文本（原始自然语言）
-
-        Returns:
-            512 维 float 列表（L2 归一化），失败返回 None
-        """
-        self._ensure_loaded()
-        if not self._loaded:
-            return None
-
-        # 加检索前缀
-        text = _QUERY_PREFIX + query
-
-        # 截断保护
-        if self._count_tokens(text) > _MAX_TOKENS:
-            # 前缀约 15-20 tokens，剩余给 query
-            prefix_tokens = self._count_tokens(_QUERY_PREFIX)
-            available = _MAX_TOKENS - prefix_tokens
-            if available > 10:
-                text = _QUERY_PREFIX + self._truncate_content(query, available)
-            else:
-                text = self._truncate_content(text, _MAX_TOKENS)
-
-        try:
-            emb = self._model.encode(
-                text,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-            return emb.tolist()
-        except Exception as e:
-            logger.error(f"Query embedding 失败: {e}")
             return None

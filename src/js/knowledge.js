@@ -10,6 +10,7 @@ const Knowledge = (() => {
   let _delegatedBound = false;
   let _deleting = false;
   let _uploading = false;
+  let _searchQuery = '';
 
   // ===== mount / destroy =====
 
@@ -18,6 +19,7 @@ const Knowledge = (() => {
     _delegatedBound = false;
     _deleting = false;
     _uploading = false;
+    _searchQuery = '';
     await _loadItems();
     _render();
   }
@@ -27,6 +29,7 @@ const Knowledge = (() => {
     _delegatedBound = false;
     _deleting = false;
     _uploading = false;
+    _searchQuery = '';
   }
 
   // ===== 数据加载 =====
@@ -49,7 +52,7 @@ const Knowledge = (() => {
   function _checkLocked() {
     if (typeof Chat !== 'undefined' && Chat.isGenerating) {
       if (typeof App !== 'undefined' && App.showToast) {
-        App.showToast('Lubia 工作时可能频繁读写知识库，禁止随意操作哦', 'warning');
+        App.showToast('Lubia 工作中，请等待回复完成后再操作知识库', 'warning');
       }
       return true;
     }
@@ -210,7 +213,7 @@ const Knowledge = (() => {
           <div class="form-group">
             <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">信息内容 <span class="char-count" id="_kContentCount">${(item.content || '').length}/${MAX_CONTENT}</span></label>
             <textarea class="input" id="_kEditContent" rows="8" placeholder="输入内容…（最多 ${MAX_CONTENT} 字）" maxlength="${MAX_CONTENT}" style="resize:vertical;min-height:160px;font-family:inherit;font-size:0.88rem;line-height:1.6;width:100%;box-sizing:border-box;">${_esc(item.content || '')}</textarea>
-            <div style="font-size:0.72rem;color:var(--text-tip);margin-top:2px;">类别 + 内容 + 关键词总长限 250 token，超长后台自动截断</div>
+            <div style="font-size:0.72rem;color:var(--text-tip);margin-top:2px;">内容限 250 token，超长后台自动截断</div>
           </div>
           <div class="form-group">
             <label style="display:block;font-size:0.78rem;color:var(--text-sub);margin-bottom:4px;">关键词（逗号分隔，每词≤${MAX_KW_EACH}字，最多${MAX_KW_COUNT}个） <span class="char-count" id="_kKwCount">${(item.keywords || []).length}/${MAX_KW_COUNT}</span></label>
@@ -344,26 +347,49 @@ const Knowledge = (() => {
 
   function _renderTips() {
     return `<div class="knowledge-tips">
-      <div class="knowledge-tips-item">上传文件让 AI 自动提炼信息，或点击已有卡片手动编辑</div>
-      <div class="knowledge-tips-item">显式知识会被 AI 搜索引用，隐藏的知识不会出现在回答中</div>
-      <div class="knowledge-tips-item">「同步」按钮用于检查并修复搜索索引，日常无需手动操作</div>
+      <div class="knowledge-tips-left">
+        <div class="knowledge-tips-item">上传文件让 AI 自动提炼信息，或点击已有卡片手动编辑</div>
+        <div class="knowledge-tips-item">显式知识会被 AI 搜索引用，隐藏的知识不会出现在回答中</div>
+        <div class="knowledge-tips-item">「同步」按钮用于检查并修复搜索索引，日常无需手动操作</div>
+      </div>
+      <div class="knowledge-search">
+        <input type="text" id="kSearchInput" placeholder="搜索知识…" value="${_escAttr(_searchQuery)}">
+      </div>
     </div>`;
   }
 
   function _renderHeader() {
     const label = _view === 'visible' ? '显式知识 · AI 可以检索和引用' : '隐藏知识 · 仅存储，AI 不会看到';
-    return `<div class="knowledge-view-hint">${label} · ${_items.length} 条</div>`;
+    const filtered = _filteredItems();
+    const count = `${filtered.length} 条`;
+    const search = _searchQuery ? ` · 搜索「${_esc(_searchQuery)}」` : '';
+    return `<div class="knowledge-view-hint">${label} · ${count}${search}</div>`;
+  }
+
+  function _filteredItems() {
+    if (!_searchQuery.trim()) return _items;
+    const q = _searchQuery.toLowerCase();
+    return _items.filter(item => {
+      if ((item.content || '').toLowerCase().includes(q)) return true;
+      if ((item.category || '').toLowerCase().includes(q)) return true;
+      if ((item.keywords || []).some(k => (k || '').toLowerCase().includes(q))) return true;
+      return false;
+    });
   }
 
   function _renderList() {
-    if (_items.length === 0) {
+    const items = _filteredItems();
+    if (items.length === 0) {
+      const msg = _searchQuery ? `没有匹配「${_esc(_searchQuery)}」的知识条目` : (_view === 'visible' ? '还没有显式知识条目' : '没有隐藏条目');
       return `<div class="knowledge-empty">
-        <p>${_view === 'visible' ? '还没有显式知识条目' : '没有隐藏条目'}</p>
+        <p>${msg}</p>
         <span style="font-size:0.78rem;color:var(--text-tip);">上传文本文件，AI 将自动提取结构化信息</span>
       </div>`;
     }
-    const cards = _items.map(item => _renderCard(item)).join('');
-    return `<div class="knowledge-list">${cards}</div>`;
+    // 分批渲染：前 80 条直接渲染，超出用 content-visibility: auto 懒渲染
+    const cards = items.map(item => _renderCard(item)).join('');
+    const hint = items.length > 80 ? `<div class="knowledge-view-hint" style="text-align:center;padding:4px;">共 ${items.length} 条，已启用懒加载</div>` : '';
+    return `<div class="knowledge-list">${cards}${hint}</div>`;
   }
 
   function _renderCard(item) {
@@ -429,10 +455,26 @@ const Knowledge = (() => {
         const v = btn.dataset.view;
         if (v === _view) return;
         _view = v;
+        _searchQuery = '';
         await _loadItems();
         _render();
       });
     });
+
+    // 搜索框：防抖 200ms 后过滤
+    const searchInput = el.querySelector('#kSearchInput');
+    if (searchInput) {
+      let _searchTimer;
+      searchInput.addEventListener('input', () => {
+        clearTimeout(_searchTimer);
+        _searchTimer = setTimeout(() => {
+          _searchQuery = searchInput.value || '';
+          _render();
+        }, 200);
+      });
+      // mount 后聚焦搜索框
+      setTimeout(() => { searchInput.focus(); }, 100);
+    }
   }
 
   // ===== 辅助 =====

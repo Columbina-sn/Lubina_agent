@@ -37,8 +37,8 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-# lubia 命名空间：INFO，第三方别刷屏
-logging.getLogger("lubia").setLevel(logging.INFO)
+# lubia 命名空间：DEBUG（开发阶段看工具调用详情）
+logging.getLogger("lubia").setLevel(logging.DEBUG)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)

@@ -23,11 +23,12 @@ from ..services.embedding_service import get_embedding_service
 logger = logging.getLogger("lubia.knowledge_rag")
 
 
-async def knowledge_rag(query: str) -> str:
+async def knowledge_rag(query: str, limit: int = 8) -> str:
     """在 knowledge_infos 中语义搜索
 
     Args:
         query: 自然语言查询文本（完整句子，不需要拆成关键词）
+        limit: 返回结果数上限（默认 8，预 RAG 等场景用 3）
 
     Returns:
         格式化后的搜索结果文本（供 AI 阅读）
@@ -42,7 +43,7 @@ async def knowledge_rag(query: str) -> str:
         )
 
     # ── 1. Embedding 查询文本 ──
-    query_vec = svc.embed_query(query)
+    query_vec = svc.embed_content(query)
     if query_vec is None:
         return "语义搜索失败：无法对查询文本生成向量。请改用 knowledge_grep。"
 
@@ -56,12 +57,18 @@ async def knowledge_rag(query: str) -> str:
     # ── 3. KNN 搜索 + JOIN 主表过滤 is_visible ──
     conn = get_db()
     try:
-        # vec0 MATCH 触发 KNN 扫描，JOIN 后过滤 is_visible
+        # vec0 KNN 子查询不能引用辅助列（+info_id/+is_visible），
+        # 内层只拿 rowid+distance → 外层 JOIN vec_knowledge 取 info_id → JOIN 主表过滤
+        k_val = max(1, min(limit, 20))  # 夹紧 1~20
         rows = conn.execute(
-            """SELECT v.info_id, v.distance, k.category, k.content, k.keywords
-               FROM vec_knowledge v
-               INNER JOIN knowledge_infos k ON v.info_id = k.id
-               WHERE v.embedding MATCH ? AND k.is_visible = 1 AND k = 8""",
+            f"""SELECT v.distance, ki.id, ki.category, ki.content, ki.keywords
+               FROM (
+                 SELECT rowid, distance
+                 FROM vec_knowledge
+                 WHERE embedding MATCH ? AND k = {k_val}
+               ) v
+               INNER JOIN vec_knowledge v2 ON v.rowid = v2.rowid
+               INNER JOIN knowledge_infos ki ON v2.info_id = ki.id AND ki.is_visible = 1""",
             (query_blob,),
         ).fetchall()
 

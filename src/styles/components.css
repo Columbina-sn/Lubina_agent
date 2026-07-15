@@ -853,7 +853,7 @@ select.input {
    ═══════════════════════════════════════════ */
 
 .knowledge-page {
-  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  display: flex; flex-direction: column; overflow-y: auto;
 }
 
 /* ── 工具栏 ── */
@@ -884,14 +884,28 @@ select.input {
 
 /* ── 视图提示 ── */
 .knowledge-view-hint {
-  padding: 8px 20px; font-size: 0.75rem; color: var(--text-tip);
+  padding: 4px 20px 8px; font-size: 0.75rem; color: var(--text-tip);
   flex-shrink: 0;
 }
+
+.knowledge-search {
+  width: 220px; flex-shrink: 0;
+}
+.knowledge-search input {
+  width: 100%; box-sizing: border-box; padding: 5px 12px; font-size: 0.8rem;
+  font-family: inherit; border: 1px solid var(--border-card); border-radius: var(--radius-sm);
+  background: var(--bg-input); color: var(--text-body); outline: none;
+}
+.knowledge-search input:focus { border-color: var(--primary); }
+.knowledge-search input::placeholder { color: var(--text-tip); }
 
 /* ── 使用提示 ── */
 .knowledge-tips {
   padding: 8px 20px; flex-shrink: 0;
-  display: flex; flex-direction: column; gap: 3px;
+  display: flex; align-items: center; gap: 16px;
+}
+.knowledge-tips-left {
+  display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0;
 }
 .knowledge-tips-item {
   font-size: 0.73rem; color: var(--info);
@@ -904,7 +918,7 @@ select.input {
 
 /* ── 列表 ── */
 .knowledge-list {
-  flex: 1; overflow-y: auto; padding: 0 16px 16px;
+  padding: 0 16px 16px;
   display: flex; flex-direction: column; gap: 6px;
 }
 
@@ -913,6 +927,7 @@ select.input {
   background: var(--bg-card); border: 1px solid var(--border-card);
   border-radius: var(--radius-md); overflow: hidden;
   transition: border-color var(--transition-fast); cursor: pointer;
+  content-visibility: auto; contain-intrinsic-size: auto 80px;
 }
 .knowledge-card:hover { border-color: var(--primary); }
 

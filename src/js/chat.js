@@ -408,8 +408,18 @@ const Chat = (() => {
       },
       web_fetch: {
         detail: `读取网页：${args?.url || ''}`,
-        human: 'Lubia 在根据网址查询内容……',
+        human: '正在根据网址查询内容……',
         done: '网页内容读取完成',
+      },
+      list_files: {
+        detail: `读取文件树：${args?.path || '根目录'}`,
+        human: '正在查看你的工作区文件夹……',
+        done: '文件树读取完成',
+      },
+      knowledge_import: {
+        detail: `记住信息：${args?.content ? args.content.slice(0, 40) + '…' : ''}`,
+        human: '发现了一条你不知道的信息，正在后台拆解归档……',
+        done: '信息已归档，以后聊天时 Lubia 会记得',
       },
     };
     const l = labels[tool] || {

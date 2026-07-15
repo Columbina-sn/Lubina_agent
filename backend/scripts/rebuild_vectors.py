@@ -8,7 +8,6 @@
     python -m backend.scripts.rebuild_vectors
 """
 
-import json
 import sys
 import os
 
@@ -70,17 +69,11 @@ def rebuild():
     try:
         for i, row in enumerate(rows):
             info_id = row["id"]
-            cat = row["category"] or ""
             content = row["content"] or ""
             is_visible = row["is_visible"]
 
-            try:
-                kw = json.loads(row["keywords"] or "[]")
-            except (json.JSONDecodeError, TypeError):
-                kw = []
-
             # Embedding
-            vec = svc.embed_knowledge(cat, content, kw)
+            vec = svc.embed_content(content)
             if vec is None:
                 print(f"  [{i+1}/{total}] 跳过 {info_id}: embedding 失败")
                 failed += 1

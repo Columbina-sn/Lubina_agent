@@ -79,6 +79,7 @@ async def chat_completions(req: ChatRequest):
                 model=req.model,
                 stream_callback=stream_callback,
                 abort_check=abort_check,
+                sandbox_root=req.sandbox_root,
             )
         )
 
