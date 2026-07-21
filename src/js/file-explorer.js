@@ -315,14 +315,14 @@ const FileExplorer = (() => {
     const ext = node.ext || node.name.split('.').pop()?.toLowerCase();
 
     if (TEXT_EXTS.has(ext) || ext === 'svg') {
-      App.showPage('editor');
+      App.showPage('editor', { noToggle: true });
       setTimeout(() => {
         if (typeof Editor !== 'undefined' && Editor.openFile) {
           Editor.openFile(node.path, node.name);
         }
       }, 150);
     } else {
-      App.showPage('editor');
+      App.showPage('editor', { noToggle: true });
       setTimeout(() => {
         if (typeof Editor !== 'undefined' && Editor.openBinary) {
           Editor.openBinary(node.name, ext);
@@ -357,7 +357,7 @@ const FileExplorer = (() => {
 
   function openFileInSide(node) {
     const ext = node.ext || node.name.split('.').pop()?.toLowerCase();
-    App.showPage('editor');
+    App.showPage('editor', { noToggle: true });
     setTimeout(() => {
       if (typeof Editor !== 'undefined' && Editor.openFileInSide) {
         Editor.openFileInSide(node.path, node.name);
@@ -367,7 +367,7 @@ const FileExplorer = (() => {
 
   function openWithPreview(node) {
     const ext = node.ext || node.name.split('.').pop()?.toLowerCase();
-    App.showPage('editor');
+    App.showPage('editor', { noToggle: true });
     setTimeout(() => {
       if (typeof Editor !== 'undefined' && Editor.openFile) {
         Editor.openFile(node.path, node.name, Editor.getActivePanel ? Editor.getActivePanel() : 0);

@@ -20,3 +20,4 @@ class ChatRequest(BaseModel):
     max_tokens: Optional[int] = Field(default=None)
     temperature: Optional[float] = Field(default=None)
     sandbox_root: Optional[str] = Field(default=None, description="工作区根目录路径")
+    session_id: Optional[str] = Field(default=None, description="会话 ID，用于排队消息注入")

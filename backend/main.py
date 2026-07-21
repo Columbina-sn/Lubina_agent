@@ -19,7 +19,7 @@ import uvicorn
 from .config import HOST, PORT, DEBUG
 from .schemas.response import ApiResponse
 from .database import init_db, diagnose_vector_db
-from .routers import providers, chat, config_router, vendors, knowledge
+from .routers import providers, chat, config_router, vendors, knowledge, usage
 from .utils import ok, fail
 
 # ═══════════════════════════════════════════
@@ -162,6 +162,7 @@ app.include_router(chat.router)
 app.include_router(config_router.router)
 app.include_router(vendors.router)
 app.include_router(knowledge.router)
+app.include_router(usage.router)
 
 # ═══════════════════════════════════════════
 # 路由

@@ -117,6 +117,20 @@ CREATE TABLE IF NOT EXISTS knowledge_infos (
 -- 如果 sqlite-vec 未加载，此建表语句会被静默跳过（不报错）
 -- +前缀 = 辅助列（存储但不参与 KNN 过滤），is_visible 通过 JOIN 主表过滤
 -- embedding float[512]: bge-small-zh-v1.5 输出维度
+
+-- API 用量统计表
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_id TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    input_chars INTEGER DEFAULT 0,
+    output_chars INTEGER DEFAULT 0,
+    est_input_tokens INTEGER DEFAULT 0,
+    est_output_tokens INTEGER DEFAULT 0,
+    actual_input_tokens INTEGER DEFAULT 0,
+    actual_output_tokens INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 # ── 默认供应商种子数据 ──
@@ -132,8 +146,8 @@ DEFAULT_PROVIDERS = [
         "is_enabled": 1,
         "sort_order": 0,
         "models": [
-            {"id": "pm_ds_pro", "model_name": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro", "is_enabled": 1, "sort_order": 0},
-            {"id": "pm_ds_flash", "model_name": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash", "is_enabled": 1, "sort_order": 1},
+            {"id": "pm_ds_pro", "model_name": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro（1M上下文）", "is_enabled": 1, "sort_order": 0},
+            {"id": "pm_ds_flash", "model_name": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash（1M上下文）", "is_enabled": 1, "sort_order": 1},
         ],
     },
     {
@@ -146,8 +160,8 @@ DEFAULT_PROVIDERS = [
         "is_enabled": 0,
         "sort_order": 1,
         "models": [
-            {"id": "pm_o_4o", "model_name": "gpt-4o", "display_name": "GPT-4o", "is_enabled": 1, "sort_order": 0},
-            {"id": "pm_o_4omini", "model_name": "gpt-4o-mini", "display_name": "GPT-4o Mini", "is_enabled": 1, "sort_order": 1},
+            {"id": "pm_o_4o", "model_name": "gpt-4o", "display_name": "GPT-4o（128K上下文）", "is_enabled": 1, "sort_order": 0},
+            {"id": "pm_o_4omini", "model_name": "gpt-4o-mini", "display_name": "GPT-4o Mini（128K上下文）", "is_enabled": 1, "sort_order": 1},
         ],
     },
     {
@@ -160,9 +174,9 @@ DEFAULT_PROVIDERS = [
         "is_enabled": 0,
         "sort_order": 2,
         "models": [
-            {"id": "pm_q_plus", "model_name": "qwen-plus", "display_name": "Qwen Plus", "is_enabled": 1, "sort_order": 0},
-            {"id": "pm_q_max", "model_name": "qwen-max", "display_name": "Qwen Max", "is_enabled": 1, "sort_order": 1},
-            {"id": "pm_q_flash", "model_name": "qwen-flash", "display_name": "Qwen Flash", "is_enabled": 1, "sort_order": 2},
+            {"id": "pm_q_max", "model_name": "qwen-max", "display_name": "Qwen Max（1M上下文）", "is_enabled": 1, "sort_order": 0},
+            {"id": "pm_q_plus", "model_name": "qwen-plus", "display_name": "Qwen Plus（1M上下文）", "is_enabled": 1, "sort_order": 1},
+            {"id": "pm_q_flash", "model_name": "qwen-flash", "display_name": "Qwen Flash（1M上下文）", "is_enabled": 1, "sort_order": 2},
         ],
     },
     {
@@ -175,9 +189,10 @@ DEFAULT_PROVIDERS = [
         "is_enabled": 0,
         "sort_order": 3,
         "models": [
-            {"id": "pm_k_k26", "model_name": "kimi-k2.6", "display_name": "Kimi K2.6", "is_enabled": 1, "sort_order": 0},
-            {"id": "pm_k_k25", "model_name": "kimi-k2.5", "display_name": "Kimi K2.5", "is_enabled": 1, "sort_order": 1},
-            {"id": "pm_k_v1", "model_name": "moonshot-v1-128k", "display_name": "Moonshot V1 128K", "is_enabled": 1, "sort_order": 2},
+            {"id": "pm_k_k3", "model_name": "kimi-k3", "display_name": "Kimi K3（1M上下文）", "is_enabled": 1, "sort_order": 0},
+            {"id": "pm_k_k26", "model_name": "kimi-k2.6", "display_name": "Kimi K2.6（1M上下文）", "is_enabled": 1, "sort_order": 1},
+            {"id": "pm_k_k25", "model_name": "kimi-k2.5", "display_name": "Kimi K2.5（256K上下文）", "is_enabled": 1, "sort_order": 2},
+            {"id": "pm_k_v1", "model_name": "moonshot-v1-128k", "display_name": "Moonshot V1（128K上下文）", "is_enabled": 1, "sort_order": 3},
         ],
     },
 ]
@@ -218,6 +233,9 @@ def init_db():
         count = conn.execute("SELECT COUNT(*) FROM providers").fetchone()[0]
         if count == 0:
             _seed_providers(conn)
+        else:
+            # 已有数据 → 只同步缺失的默认模型（如新版本新增的模型）
+            _sync_default_models(conn)
 
         conn.commit()
     finally:
@@ -308,3 +326,26 @@ def _seed_providers(conn: sqlite3.Connection):
     ]
     for key, value in defaults:
         conn.execute("INSERT OR IGNORE INTO user_config (key, value) VALUES (?, ?)", (key, value))
+
+
+def _sync_default_models(conn: sqlite3.Connection):
+    """同步默认模型：对已有供应商，补入缺失模型 + 更新 display_name。
+
+    升级时新模型自动补入，已存在模型的 display_name 同步更新。
+    """
+    for p in DEFAULT_PROVIDERS:
+        exists = conn.execute("SELECT COUNT(*) FROM providers WHERE id = ?", (p["id"],)).fetchone()[0]
+        if not exists:
+            continue
+        for m in p.get("models", []):
+            display = m.get("display_name", m["model_name"])
+            conn.execute(
+                "INSERT OR IGNORE INTO models (id, provider_id, model_name, display_name, is_enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?)",
+                (m["id"], p["id"], m["model_name"], display, m["is_enabled"], m["sort_order"]),
+            )
+            # 已存在的模型也更新 display_name（如上下文窗口标注变更）
+            conn.execute(
+                "UPDATE models SET display_name = ?, sort_order = ? WHERE id = ?",
+                (display, m["sort_order"], m["id"]),
+            )
+    conn.commit()

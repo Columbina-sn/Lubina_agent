@@ -16,9 +16,14 @@
 """
 
 import json
+import logging
 import re
+import time
 import httpx
 from typing import AsyncIterator, Optional, Callable
+from .token_estimator import estimate_tokens, estimate_messages_tokens
+
+logger = logging.getLogger("lubia.llm_caller")
 
 
 class LLMCaller:
@@ -73,6 +78,28 @@ class LLMCaller:
         Raises:
             RuntimeError: API 返回错误或重试耗尽
         """
+        # ── Debug: 调用前统计 ──
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        input_chars = total_chars
+        sys_messages = [m for m in messages if m.get("role") == "system"]
+        sys_chars = sum(len(m.get("content", "")) for m in sys_messages)
+        user_msgs = [m for m in messages if m.get("role") == "user"]
+        assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+        est_input = estimate_messages_tokens(messages)
+
+        logger.debug(
+            f"LLM 调用 | url={self.url} | model={self._model} | "
+            f"消息={len(messages)}条(sys:{len(sys_messages)} user:{len(user_msgs)} asst:{len(assistant_msgs)}) | "
+            f"总字符={total_chars} | 估算token≈{est_input}"
+        )
+        if sys_messages:
+            for i, sm in enumerate(sys_messages):
+                content = sm.get("content", "")
+                logger.debug(
+                    f"  system[{i}] | 长度={len(content)}字符 | 行数={content.count(chr(10))}行 | "
+                    f"预览={content[:80].replace(chr(10), ' ')}…"
+                )
+
         body = {
             "model": self._model,
             "messages": messages,
@@ -80,6 +107,7 @@ class LLMCaller:
         }
 
         last_error = None
+        t0 = time.time()
         for attempt in range(max_retries + 1):
             try:
                 async with httpx.AsyncClient(
@@ -101,16 +129,70 @@ class LLMCaller:
                             continue
                         raise last_error
 
-                    data = resp.json()
+                    try:
+                        data = resp.json()
+                    except (json.JSONDecodeError, ValueError) as e:
+                        last_error = RuntimeError(f"AI 返回了无法解析的响应: {str(e)}")
+                        if attempt < max_retries:
+                            await self._backoff(attempt)
+                            continue
+                        raise last_error
+
                     content = (
                         data.get("choices", [{}])[0]
                         .get("message", {})
                         .get("content", "")
                     )
+                    elapsed = (time.time() - t0) * 1000
+                    output_chars = len(content)
+                    est_output = estimate_tokens(content)
+
+                    # 读取 API 返回的实际 token 用量
+                    actual_usage = data.get("usage", {})
+                    actual_in = actual_usage.get("prompt_tokens", 0) or 0
+                    actual_out = actual_usage.get("completion_tokens", 0) or 0
+                    if actual_usage:
+                        usage_str = f"实际token=[in={actual_in} out={actual_out} total={actual_usage.get('total_tokens','?')}]"
+                    else:
+                        usage_str = f"估算token=[in≈{est_input} out≈{est_output}]"
+
+                    logger.debug(
+                        f"LLM 响应 | 耗时={elapsed:.0f}ms | 内容长={output_chars}字符 | "
+                        f"{usage_str}"
+                    )
+
+                    # 记录用量到 SQLite
+                    _record_usage(
+                        provider_id=self._model,  # 用 model 字段区分
+                        model=self._model,
+                        input_chars=input_chars,
+                        output_chars=output_chars,
+                        est_input_tokens=est_input,
+                        est_output_tokens=est_output,
+                        actual_input_tokens=actual_in,
+                        actual_output_tokens=actual_out,
+                    )
+
+                    # 空内容也视为可疑，但直接返回让上层处理
                     return content
 
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
-                last_error = RuntimeError(f"网络连接失败: {str(e)}")
+            except httpx.ConnectError as e:
+                logger.debug(f"LLM 连接失败(第{attempt+1}次): {e}")
+                last_error = RuntimeError(f"无法连接到 AI 服务器，请检查网络: {str(e)}")
+                if attempt < max_retries:
+                    await self._backoff(attempt)
+                    continue
+                raise last_error
+            except httpx.TimeoutException as e:
+                logger.debug(f"LLM 超时(第{attempt+1}次): {e}")
+                last_error = RuntimeError(f"AI 响应超时（>120秒），请稍后重试: {str(e)}")
+                if attempt < max_retries:
+                    await self._backoff(attempt)
+                    continue
+                raise last_error
+            except httpx.RemoteProtocolError as e:
+                logger.debug(f"LLM 连接中断(第{attempt+1}次): {e}")
+                last_error = RuntimeError(f"AI 服务器连接中断: {str(e)}")
                 if attempt < max_retries:
                     await self._backoff(attempt)
                     continue
@@ -310,3 +392,36 @@ class LLMCaller:
         import asyncio
         delay = min(2 ** attempt, 8)  # 1s, 2s, 4s, 8s cap
         await asyncio.sleep(delay)
+
+
+# ── 模块级工具：用量记录 ──
+
+def _record_usage(
+    provider_id: str = "",
+    model: str = "",
+    input_chars: int = 0,
+    output_chars: int = 0,
+    est_input_tokens: int = 0,
+    est_output_tokens: int = 0,
+    actual_input_tokens: int = 0,
+    actual_output_tokens: int = 0,
+):
+    """将 API 调用用量写入 SQLite usage_logs 表"""
+    try:
+        import sqlite3
+        from ..database import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """INSERT INTO usage_logs
+               (provider_id, model, input_chars, output_chars,
+                est_input_tokens, est_output_tokens,
+                actual_input_tokens, actual_output_tokens)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (provider_id, model, input_chars, output_chars,
+             est_input_tokens, est_output_tokens,
+             actual_input_tokens, actual_output_tokens),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # 记录失败不影响主流程

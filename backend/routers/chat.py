@@ -1,4 +1,4 @@
-"""聊天 API — Re-Act 循环 + SSE 流式
+"""聊天 API — Re-Act 循环 + SSE 流式 + 排队消息注入
 
 POST /api/chat/completions
   所有模式（ask/plan/agent）统一经过 Re-Act 循环：
@@ -11,19 +11,54 @@ SSE 事件类型：
   {"type": "tool_result", "tool": "...", "result": "...", "label": "..."}
   {"type": "tool_error", "tool": "...", "error": "..."}
   {"type": "delta", "content": "..."}                 — 文本增量
+  {"type": "user_injected", "messages": [...]}        — 排队消息已注入
   {"type": "done"}                                     — 完成
 """
 
 import json
 import asyncio
-from fastapi import APIRouter
+import logging
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from ..database import get_db
 from ..schemas.chat import ChatRequest
 from ..services.react_loop import run_react_loop
 from ..utils import fail
 
+logger = logging.getLogger("lubia.chat")
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# 会话级排队消息注入队列（内存字典，进程重启时清空）
+# key = session_id, value = [{content, timestamp}, ...]
+_INJECT_QUEUES: dict[str, list[dict]] = {}
+
+
+@router.post("/inject")
+async def chat_inject(req: Request):
+    """排队消息注入：在 ReAct 循环运行中插入用户消息"""
+    try:
+        body = await req.json()
+    except Exception:
+        return fail(message="请求体非 JSON", code=400)
+
+    session_id = body.get("session_id", "")
+    messages = body.get("messages", [])
+
+    if not session_id:
+        return fail(message="缺少 session_id", code=400)
+    if not messages or not isinstance(messages, list):
+        return fail(message="messages 为空或格式错误", code=400)
+
+    if session_id not in _INJECT_QUEUES:
+        _INJECT_QUEUES[session_id] = []
+
+    for msg in messages:
+        content = msg.get("content", "").strip()
+        if content:
+            _INJECT_QUEUES[session_id].append({"content": content, "timestamp": msg.get("timestamp", "")})
+
+    logger.debug(f"注入消息 | session={session_id[:8]}… | 新增={len(messages)}条 | 队列总计={len(_INJECT_QUEUES[session_id])}条")
+    return {"code": 200, "message": "ok", "data": {"injected": len(messages)}}
 
 
 @router.post("/completions")
@@ -53,6 +88,12 @@ async def chat_completions(req: ChatRequest):
     # 2. 构建消息历史
     messages = [m.model_dump() for m in req.messages]
 
+    # 会话 ID：用于排队消息注入
+    session_id = req.session_id or ""
+    if session_id:
+        _INJECT_QUEUES.setdefault(session_id, [])  # 初始化队列
+        logger.debug(f"会话注册 | session={session_id[:8]}…")
+
     # 3. SSE 事件生成器
     abort_flag = False  # 用于检测客户端断开
 
@@ -81,6 +122,7 @@ async def chat_completions(req: ChatRequest):
                 abort_check=abort_check,
                 sandbox_root=req.sandbox_root,
                 mode=req.mode,
+                session_id=session_id,
             )
         )
 
@@ -123,6 +165,9 @@ async def chat_completions(req: ChatRequest):
                 elif event_type == "max_rounds":
                     yield f"data: {json.dumps(event)}\n\n"
 
+                elif event_type == "user_injected":
+                    yield f"data: {json.dumps(event)}\n\n"
+
                 elif event_type == "done":
                     yield "data: [DONE]\n\n"
                     done_sent = True
@@ -148,6 +193,11 @@ async def chat_completions(req: ChatRequest):
             err_data = json.dumps({"type": "tool_error", "tool": "system", "error": f"系统异常：{str(exc)}"})
             yield f"data: {err_data}\n\n"
             yield "data: [DONE]\n\n"
+        finally:
+            # 清理注入队列
+            if session_id and session_id in _INJECT_QUEUES:
+                del _INJECT_QUEUES[session_id]
+                logger.debug(f"会话清理 | session={session_id[:8]}…")
 
     return StreamingResponse(
         event_generator(),

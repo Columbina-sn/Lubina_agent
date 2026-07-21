@@ -13,6 +13,8 @@ const Editor = (() => {
   let activePanel = 0;      // 当前聚焦的面板
   let splitActive = false;  // 右侧面板是否可见
   let _savedState = null;   // 页面切换时持久化状态
+  let _tabOrderCounter = 0; // 选项卡打开顺序序号（用于 FIFO 关闭策略）
+  let _syncingCM = false;   // 跨面板 CM6 同步锁（防递归触发）
 
   const TEXT_EXTS = new Set([
     'txt','md','py','js','ts','jsx','tsx','html','css','scss','less',
@@ -74,15 +76,28 @@ const Editor = (() => {
       splitActive = _savedState.splitActive;
       _savedState = null;
     }
-    // 无论如何都要刷新（恢复分屏状态 + 渲染两个面板）
-    await refreshUI();
+    // 同步 DOM 中的分屏状态（pageHTML 默认 panel1 隐藏，需根据 splitActive 恢复）
+    const p1 = document.getElementById('editorPanel1');
+    const handle = document.getElementById('editorSplitHandle');
+    if (p1) p1.classList.toggle('hidden', !splitActive);
+    if (handle) handle.classList.toggle('hidden', !splitActive);
+    // 刷新（分屏时两个面板都要刷新）
+    await refreshUI(0);
+    if (splitActive) await refreshUI(1);
     _bindSplitHandle();
   }
 
   function destroy() {
-    // 保存两个面板的最新内容
+    _teardownScrollSync();
+    // 保存两个面板的最新内容 + 滚动位置
     for (let i = 0; i < 2; i++) {
       _saveCurrentContent(i);
+      // 保存预览模式的滚动位置
+      if (panels[i].previewMode && panels[i].activeFileIndex >= 0) {
+        const pw = document.getElementById(`editorPreviewWrapper${i}`);
+        const f = panels[i].openFiles[panels[i].activeFileIndex];
+        if (pw && f) { f._scrollTop = pw.scrollTop; f._scrollLeft = pw.scrollLeft; }
+      }
       if (panels[i].cmView) { panels[i].cmView.destroy(); panels[i].cmView = null; }
       // 清理预览 wrapper（注意面板专属 ID）
       const pw = document.getElementById(`editorPreviewWrapper${i}`);
@@ -116,18 +131,59 @@ const Editor = (() => {
   // 分屏控制
   // ================================================================
 
-  function toggleSplit() {
+  function toggleSplit(keepPanel) {
+    const srcP = (keepPanel !== undefined) ? keepPanel : activePanel;
+    const otherP = srcP === 0 ? 1 : 0;
+    if (splitActive) {
+      // 合并：将对侧面板的标签页合并到 srcP
+      _saveCurrentContent(0);
+      _saveCurrentContent(1);
+      _mergePanels(srcP, otherP);
+      // 若存活方是右侧面板，把数据搬回左侧（左侧始终是单面板时的展示面板）
+      if (srcP === 1) {
+        panels[0] = panels[1];
+        panels[1] = { openFiles: [], activeFileIndex: -1, cmView: null, previewMode: false };
+        if (activePanel === 1) activePanel = 0;
+      }
+    }
     splitActive = !splitActive;
     const p1 = document.getElementById('editorPanel1');
     const handle = document.getElementById('editorSplitHandle');
     if (p1) p1.classList.toggle('hidden', !splitActive);
     if (handle) handle.classList.toggle('hidden', !splitActive);
-    // 关闭分屏时，如果右侧面板有未保存文件，先合并回左侧？
-    // 简单处理：关闭分屏不清除右侧面板数据，下次打开还在
-    if (!splitActive && activePanel === 1) {
-      focusPanel(0);
+    if (!splitActive) {
+      // 清除面板 1（已搬空或本就是被合并方）
+      if (panels[1].cmView) { panels[1].cmView.destroy(); panels[1].cmView = null; }
+      panels[1].openFiles = []; panels[1].activeFileIndex = -1; panels[1].previewMode = false;
+      if (activePanel === 1) focusPanel(0);
+      const p0 = document.getElementById('editorPanel0');
+      if (p0) { p0.style.flex = ''; p0.style.width = ''; }
     }
+    _teardownScrollSync();
     _renderAllTabs();
+    if (splitActive) { refreshUI(0); refreshUI(1); }
+    else { refreshUI(0); }
+  }
+
+  function _mergePanels(srcP, otherP) {
+    const src = panels[srcP], other = panels[otherP];
+    if (other.openFiles.length === 0) return;
+    for (const f of other.openFiles) {
+      const existIdx = src.openFiles.findIndex(sf => sf.path === f.path);
+      if (existIdx >= 0) {
+        // 同一文件：两侧 modified 取 OR
+        if (f.modified) src.openFiles[existIdx].modified = true;
+        // 如果对侧内容更新且已修改，使用对侧内容
+        if (f.modified && !src.openFiles[existIdx].modified) {
+          src.openFiles[existIdx].content = f.content;
+        }
+      } else {
+        src.openFiles.push({ ...f });
+      }
+    }
+    other.openFiles = [];
+    other.activeFileIndex = -1;
+    other.previewMode = false;
   }
 
   function focusPanel(pIdx) {
@@ -156,12 +212,32 @@ const Editor = (() => {
     const p = panels[pIdx];
     const existing = p.openFiles.findIndex(f => f.path === filePath);
     if (existing >= 0) { switchFile(existing, pIdx); return; }
+
+    // 同一文件在另一面板已打开 → 复用对象引用，实现跨面板状态同步
+    const otherP = panels[1 - pIdx];
+    const otherIdx = otherP.openFiles.findIndex(f => f.path === filePath);
+    if (otherIdx >= 0) {
+      const shared = otherP.openFiles[otherIdx];
+      // 上限检查（不会重复计数，因为同一个对象）
+      const allowed = await _makeRoomForNewFile();
+      if (!allowed) return;
+      p.openFiles.push(shared); p.activeFileIndex = p.openFiles.length - 1; p.previewMode = false;
+      await refreshUI(pIdx);
+      return;
+    }
+
     _saveCurrentContent(pIdx);
+
+    // 上限预检：若超标，先腾位置再打开
+    const allowed = await _makeRoomForNewFile();
+    if (!allowed) return; // 用户取消
+
     const ext = filePath.split('.').pop()?.toLowerCase();
-    const f = { path: filePath, name: fileName || filePath.split(/[/\\]/).pop(), content: '', isBinary: !TEXT_EXTS.has(ext), ext, modified: false };
+    const now = Date.now();
+    const f = { path: filePath, name: fileName || filePath.split(/[/\\]/).pop(), content: '', isBinary: !TEXT_EXTS.has(ext), ext, modified: false, _saved: '', lastAccess: now, openOrder: ++_tabOrderCounter };
     if (!f.isBinary) {
-      try { if (typeof Bridge !== 'undefined' && Bridge.isTauri()) f.content = await Bridge.readTextFile(filePath) || ''; }
-      catch (err) { f.content = '// 无法读取文件: ' + err.message; }
+      try { if (typeof Bridge !== 'undefined' && Bridge.isTauri()) { f.content = await Bridge.readTextFile(filePath) || ''; f._saved = f.content; } }
+      catch (err) { f.content = '// 无法读取文件: ' + err.message; f._saved = f.content; }
     }
     p.openFiles.push(f); p.activeFileIndex = p.openFiles.length - 1; p.previewMode = false;
     await refreshUI(pIdx);
@@ -171,11 +247,16 @@ const Editor = (() => {
     return openBinaryInPanel(activePanel, fileName, ext);
   }
 
-  function openBinaryInPanel(pIdx, fileName, ext) {
+  async function openBinaryInPanel(pIdx, fileName, ext) {
     const p = panels[pIdx];
     const existing = p.openFiles.findIndex(f => f.path === fileName && f.isBinary);
     if (existing >= 0) { switchFile(existing, pIdx); return; }
-    p.openFiles.push({ path: fileName, name: fileName, content: '', isBinary: true, ext, modified: false });
+
+    const allowed = await _makeRoomForNewFile();
+    if (!allowed) return;
+
+    const now = Date.now();
+    p.openFiles.push({ path: fileName, name: fileName, content: '', isBinary: true, ext, modified: false, lastAccess: now, openOrder: ++_tabOrderCounter });
     p.activeFileIndex = p.openFiles.length - 1;
     refreshUI(pIdx);
   }
@@ -190,6 +271,7 @@ const Editor = (() => {
     if (index < 0 || index >= p.openFiles.length) return;
     _saveCurrentContent(pi);
     p.activeFileIndex = index; p.previewMode = false;
+    if (p.openFiles[index]) p.openFiles[index].lastAccess = Date.now();
     refreshUI(pi);
   }
 
@@ -211,7 +293,121 @@ const Editor = (() => {
     if (p.openFiles.length === 0) p.activeFileIndex = -1;
     else if (p.activeFileIndex >= p.openFiles.length) p.activeFileIndex = p.openFiles.length - 1;
     else if (index < p.activeFileIndex) p.activeFileIndex--;
+    _teardownScrollSync();
     refreshUI(pIdx);
+  }
+
+  function _getTotalTabCount() {
+    return panels[0].openFiles.length + panels[1].openFiles.length;
+  }
+
+  function _getMaxTabCount() {
+    const v = localStorage.getItem('lubia_editor_tab_max_count');
+    return v ? Math.max(5, Math.min(20, parseInt(v) || 10)) : 10;
+  }
+
+  // 在打开新文件前调用。返回 true 表示可以继续打开，false 表示用户取消。
+  async function _makeRoomForNewFile() {
+    const max = _getMaxTabCount();
+    if (_getTotalTabCount() < max) return true; // 还没满，直接放行
+
+    // 找候选：已保存的、非当前活跃的文件
+    const all = [];
+    for (let pi = 0; pi < 2; pi++) {
+      const actIdx = panels[pi].activeFileIndex;
+      for (let fi = 0; fi < panels[pi].openFiles.length; fi++) {
+        if (fi === actIdx) continue; // 不关当前正在看的
+        all.push({ pi, fi, f: panels[pi].openFiles[fi] });
+      }
+    }
+
+    const policy = localStorage.getItem('lubia_editor_tab_close_policy') || 'lru';
+    const saved = all.filter(x => !x.f.modified);
+    if (policy === 'fifo') saved.sort((a, b) => (a.f.openOrder || 0) - (b.f.openOrder || 0));
+    else saved.sort((a, b) => (a.f.lastAccess || 0) - (b.f.lastAccess || 0));
+
+    if (saved.length > 0) {
+      // 有已保存的 → 直接关掉，腾位置
+      const target = saved[0];
+      _doClose(target.fi, target.pi);
+      return true;
+    }
+
+    // 全部未保存 → 弹窗让用户选择
+    // 找最旧的那个（按策略）作为建议关闭的对象
+    const unsaved = [...all];
+    if (policy === 'fifo') unsaved.sort((a, b) => (a.f.openOrder || 0) - (b.f.openOrder || 0));
+    else unsaved.sort((a, b) => (a.f.lastAccess || 0) - (b.f.lastAccess || 0));
+    const candidate = unsaved[0];
+    const candidateName = candidate.f.name;
+
+    return new Promise((resolve) => {
+      _modal('标签页已达上限',
+        `当前已打开 ${max} 个文件（上限），且所有文件均未保存。\n\n是否保存并关闭「${candidateName}」，然后打开新文件？`,
+        async () => {
+          // 确定 → 保存候选文件 + 关闭
+          _saveCurrentContent(candidate.pi);
+          if (typeof Bridge !== 'undefined' && Bridge.isTauri()) {
+            try {
+              await Bridge.writeTextFile(candidate.f.path, candidate.f.content);
+              candidate.f.modified = false;
+            } catch (_) { /* 保存失败也继续关闭 */ }
+          }
+          _doClose(candidate.fi, candidate.pi);
+          resolve(true);
+        },
+        () => { resolve(false); } // 取消 → 不打开
+      );
+    });
+  }
+
+  // 滚动同步 —— 同 MD 文件在两侧分屏（一源码一预览）时同步滚动百分比
+  let _scrollSyncCleanup = null;
+
+  function _teardownScrollSync() {
+    if (_scrollSyncCleanup) { _scrollSyncCleanup(); _scrollSyncCleanup = null; }
+  }
+
+  function _setupScrollSync() {
+    _teardownScrollSync();
+    if (!splitActive) return;
+
+    const f0 = panels[0].activeFileIndex >= 0 ? panels[0].openFiles[panels[0].activeFileIndex] : null;
+    const f1 = panels[1].activeFileIndex >= 0 ? panels[1].openFiles[panels[1].activeFileIndex] : null;
+    if (!f0 || !f1 || f0.path !== f1.path || f0.ext !== 'md') return;
+    if (panels[0].previewMode === panels[1].previewMode) return; // 需要一源码一预览
+
+    const srcPi = panels[0].previewMode ? 1 : 0;  // 源码面板
+    const prvPi = panels[0].previewMode ? 0 : 1;  // 预览面板
+    if (!panels[srcPi].cmView) return;
+
+    const prvWrapper = document.getElementById(`editorPreviewWrapper${prvPi}`);
+    if (!prvWrapper) return;
+
+    const srcScroller = panels[srcPi].cmView.scrollDOM;
+    let _syncing = false;
+
+    function srcToPrv() {
+      if (_syncing) return; _syncing = true;
+      const pct = srcScroller.scrollTop / Math.max(1, srcScroller.scrollHeight - srcScroller.clientHeight);
+      prvWrapper.scrollTop = pct * Math.max(0, prvWrapper.scrollHeight - prvWrapper.clientHeight);
+      _syncing = false;
+    }
+    function prvToSrc() {
+      if (_syncing) return; _syncing = true;
+      const pct = prvWrapper.scrollTop / Math.max(1, prvWrapper.scrollHeight - prvWrapper.clientHeight);
+      srcScroller.scrollTop = pct * Math.max(0, srcScroller.scrollHeight - srcScroller.clientHeight);
+      _syncing = false;
+    }
+
+    srcScroller.addEventListener('scroll', srcToPrv, { passive: true });
+    prvWrapper.addEventListener('scroll', prvToSrc, { passive: true });
+
+    _scrollSyncCleanup = () => {
+      srcScroller.removeEventListener('scroll', srcToPrv);
+      prvWrapper.removeEventListener('scroll', prvToSrc);
+      _scrollSyncCleanup = null;
+    };
   }
 
   function _saveCurrentContent(pIdx) {
@@ -220,6 +416,9 @@ const Editor = (() => {
     if (p.activeFileIndex < 0 || p.activeFileIndex >= p.openFiles.length || !p.cmView) return;
     const f = p.openFiles[p.activeFileIndex];
     if (!f.isBinary) f.content = p.cmView.state.doc.toString();
+    // 保存滚动位置（用于标签切换和页面切换后恢复）
+    f._scrollTop = p.cmView.scrollDOM?.scrollTop || 0;
+    f._scrollLeft = p.cmView.scrollDOM?.scrollLeft || 0;
   }
 
   // ================================================================
@@ -236,8 +435,11 @@ const Editor = (() => {
     if (typeof Bridge !== 'undefined' && Bridge.isTauri()) {
       try {
         await Bridge.writeTextFile(f.path, content);
-        f.content = content; f.modified = false;
+        f.content = content; f._saved = content; f.modified = false;
         _renderTabs(pi);
+        // 若同一文件在另一面板也开着，同步刷新其标签页
+        const otherP = panels[1 - pi];
+        if (otherP.openFiles.some(of => of === f)) _renderTabs(1 - pi);
         _toast('已保存', 'success');
       } catch (err) {
         _toast('保存失败: ' + err.message, 'error');
@@ -301,6 +503,7 @@ const Editor = (() => {
     await _renderContent(pi);
     // 刷新两个面板的 tabs（因为右侧面板可能有预览/分屏按钮变化）
     _renderAllTabs();
+    _setupScrollSync();
   }
 
   function refresh() {
@@ -314,6 +517,45 @@ const Editor = (() => {
     if (splitActive) _renderTabs(1);
   }
 
+  // 同名文件加父目录前缀以区分："src/index.js" vs "test/index.js"
+  function _disambiguateNames(openFiles) {
+    // 收集所有文件的 path → name 映射（按路径去重，同一文件不参与区分）
+    const byName = {};
+    const seen = new Set();
+    for (const f of openFiles) {
+      if (seen.has(f.path)) continue; // 同一文件（分屏两边同对象引用），跳过
+      seen.add(f.path);
+      if (!byName[f.name]) byName[f.name] = [];
+      byName[f.name].push(f);
+    }
+    const result = {};
+    for (const [name, files] of Object.entries(byName)) {
+      if (files.length === 1) { result[files[0].path] = name; continue; }
+      // 多个同名文件：从路径末尾往上找，直到能区分
+      const paths = files.map(f => f.path.replace(/\\/g, '/').split('/').filter(Boolean));
+      const maxLen = Math.min(...paths.map(p => p.length));
+      let minNeed = 1;
+      for (let d = 2; d <= maxLen; d++) {
+        const suffixes = paths.map(p => p.slice(-d).join('/'));
+        if (new Set(suffixes).size === suffixes.length) { minNeed = d; break; }
+        if (d === maxLen) minNeed = maxLen;
+      }
+      for (let idx = 0; idx < files.length; idx++) {
+        result[files[idx].path] = paths[idx].slice(-minNeed).join('/');
+      }
+    }
+    return result;
+  }
+
+  function _tabDisplayNames(pIdx) {
+    const p = panels[pIdx];
+    // 汇总两侧所有文件用于去重判断
+    const allFiles = [...panels[0].openFiles, ...panels[1].openFiles];
+    const names = _disambiguateNames(allFiles);
+    // 只返回当前面板文件的名字
+    return p.openFiles.map(f => names[f.path] || f.name);
+  }
+
   function _renderTabs(pIdx) {
     const pi = (pIdx !== undefined) ? pIdx : activePanel;
     const p = panels[pi];
@@ -321,23 +563,35 @@ const Editor = (() => {
 
     const f = p.activeFileIndex >= 0 ? p.openFiles[p.activeFileIndex] : null;
     const canPreview = f && (f.ext === 'md' || f.ext === 'html');
-    const isActive = (pi === activePanel);
+    const hasFiles = p.openFiles.length > 0;
+    const displayNames = _tabDisplayNames(pi);
 
-    el.innerHTML = p.openFiles.map((f, i) => `
-      <div class="editor-tab ${i === p.activeFileIndex ? 'active' : ''} ${pi === activePanel ? '' : 'inactive-panel'}"
-           onclick="Editor.switchFile(${i},${pi})">
-        <span>${_esc(f.name)}</span>${f.modified ? '<span class="tab-modified" title="未保存"></span>' : ''}
-        <span class="tab-close" onclick="event.stopPropagation();Editor.closeFile(${i},${pi})"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
-      </div>`).join('')
-      // 右侧操作区：预览切换 + 分屏切换
-      + `<div class="editor-tabs-actions">
+    // 只有当前面板有文件时才显示分屏/合并按钮
+    const showSplitBtn = hasFiles;
+    const btnLabel = splitActive ? '合并' : '分屏';
+    const btnTitle = splitActive ? '关闭分屏' : '分屏';
+
+    el.innerHTML =
+      `<div class="editor-tabs-wrap">${p.openFiles.map((f, i) => {
+        const dn = displayNames[i] || f.name;
+        return `
+        <div class="editor-tab ${i === p.activeFileIndex ? 'active' : ''} ${pi === activePanel ? '' : 'inactive-panel'}"
+             onclick="Editor.switchFile(${i},${pi})" title="${_esc(f.path)}${f.modified ? ' (未保存)' : ''}">
+          <span>${_esc(dn)}</span>
+          <span class="tab-indicator">
+            ${f.modified ? '<span class="tab-modified" title="未保存"></span>' : ''}
+            <span class="tab-close" onclick="event.stopPropagation();Editor.closeFile(${i},${pi})"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+          </span>
+        </div>`;
+      }).join('')}</div>
+      <div class="editor-tabs-actions">
         ${canPreview ? `<button class="editor-action-btn" id="btnPreviewToggle${pi}" title="${p.previewMode ? '编辑源码' : '预览'}">${p.previewMode ? '编辑源码' : '预览'}</button>` : ''}
-        <button class="editor-action-btn" id="btnSplitToggle${pi}" title="${splitActive ? '关闭分屏' : '分屏'}">${splitActive ? '合并' : '分屏'}</button>
+        ${showSplitBtn ? `<button class="editor-action-btn" id="btnSplitToggle${pi}" title="${btnTitle}">${btnLabel}</button>` : ''}
       </div>`;
 
     // 绑定事件
     el.querySelector('#btnPreviewToggle' + pi)?.addEventListener('click', () => togglePreview(pi));
-    el.querySelector('#btnSplitToggle' + pi)?.addEventListener('click', () => toggleSplit());
+    el.querySelector('#btnSplitToggle' + pi)?.addEventListener('click', () => toggleSplit(pi));
   }
 
   async function _renderContent(pIdx) {
@@ -348,6 +602,11 @@ const Editor = (() => {
           empty = _el('EmptyState', pi);
     const pw = document.getElementById(`editorPreviewWrapper${pi}`);
 
+    // 保存当前预览的滚动位置（如有）
+    if (pw && p.previewMode && p.activeFileIndex >= 0) {
+      const activeFile = p.openFiles[p.activeFileIndex];
+      if (activeFile) { activeFile._scrollTop = pw.scrollTop; activeFile._scrollLeft = pw.scrollLeft; }
+    }
     if (p.cmView) { p.cmView.destroy(); p.cmView = null; }
     if (pw) pw.remove();
 
@@ -414,6 +673,54 @@ const Editor = (() => {
       pw.appendChild(iframe);
       iframe.srcdoc = file.content;
     }
+    // 恢复预览滚动位置
+    if (file._scrollTop !== undefined || file._scrollLeft !== undefined) {
+      const st = file._scrollTop || 0, sl = file._scrollLeft || 0;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (pw) {
+            if (st) pw.scrollTop = st;
+            if (sl) pw.scrollLeft = sl;
+          }
+        });
+      });
+    }
+  }
+
+  let _previewVersion = 0; // 版本号，丢弃过时的异步结果（自增到 1e6 回绕，永不溢出）
+
+  // 增量更新预览（不闪烁），用于内容实时同步场景
+  async function _refreshPreview(file, pIdx) {
+    const pw = document.getElementById(`editorPreviewWrapper${pIdx}`);
+    if (!pw) return;
+    if (++_previewVersion > 1_000_000) _previewVersion = 1;
+    const ver = _previewVersion;
+    if (file.ext === 'md') {
+      const body = pw.querySelector('.markdown-body');
+      if (!body) { _renderPreview(file, pIdx); return; }
+      try {
+        const m = await import('marked');
+        // 过时检查：快速连续输入时丢弃旧版本的异步结果
+        if (ver !== _previewVersion) return;
+        const parseFn = typeof m.marked === 'function' ? m.marked
+                      : typeof m.parse === 'function' ? m.parse
+                      : typeof m.default?.marked === 'function' ? m.default.marked
+                      : typeof m.default?.parse === 'function' ? m.default.parse
+                      : typeof m.default === 'function' ? m.default
+                      : null;
+        if (!parseFn) throw new Error('无法找到 marked 解析函数');
+        let html = parseFn(file.content);
+        if (ver !== _previewVersion) return;
+        html = html.replace(/<pre><code class="language-(\w+)">/g, '<pre data-lang="$1"><code>');
+        html = html.replace(/<pre><code>/g, '<pre data-lang="code"><code>');
+        if (ver !== _previewVersion) return;
+        body.innerHTML = html;
+      } catch (_) { if (ver === _previewVersion) _renderPreview(file, pIdx); }
+    } else if (file.ext === 'html') {
+      const iframe = pw.querySelector('iframe');
+      if (iframe) { iframe.srcdoc = file.content; }
+      else { _renderPreview(file, pIdx); }
+    }
   }
 
   function togglePreview(pIdx) {
@@ -422,10 +729,16 @@ const Editor = (() => {
     if (p.activeFileIndex < 0) return;
     const f = p.openFiles[p.activeFileIndex];
     if (f.ext !== 'md' && f.ext !== 'html') return;
+    // 未保存文件不允许切换到预览
+    if (!p.previewMode && f.modified) {
+      _toast('请先保存文件再预览（Ctrl+S）', 'warning');
+      return;
+    }
     _saveCurrentContent(pi);
     p.previewMode = !p.previewMode;
     _renderContent(pi);
     _renderTabs(pi);
+    _setupScrollSync();
   }
 
   async function _mk(parent, file, pIdx) {
@@ -461,11 +774,34 @@ const Editor = (() => {
 
       const ext = [...[].concat(basicSetup), saveBinding, copyBinding,
         EditorView.updateListener.of(u => {
-          if (u.docChanged && _cmSettled) {
+          if (u.docChanged && _cmSettled && !_syncingCM) {
             const panel = panels[pi];
             if (panel.activeFileIndex >= 0 && panel.activeFileIndex < panel.openFiles.length) {
-              panel.openFiles[panel.activeFileIndex].modified = true;
+              const ff = panel.openFiles[panel.activeFileIndex];
+              const cur = u.state.doc.toString();
+              ff.content = cur;
+              ff.modified = (cur !== (ff._saved ?? ''));
               _renderTabs(pi);
+              // 若同一文件在另一面板也开着，推送内容到对侧 CM6 + 刷新对侧预览
+              const otherP = panels[1 - pi];
+              const otherHasFile = otherP.activeFileIndex >= 0 && otherP.openFiles[otherP.activeFileIndex] === ff;
+              if (otherHasFile) {
+                if (otherP.cmView) {
+                  const otherCur = otherP.cmView.state.doc.toString();
+                  if (cur !== otherCur) {
+                    _syncingCM = true;
+                    otherP.cmView.dispatch({
+                      changes: { from: 0, to: otherP.cmView.state.doc.length, insert: cur }
+                    });
+                    _syncingCM = false;
+                  }
+                }
+                // 对侧若是预览模式，增量刷新预览
+                if (otherP.previewMode) _refreshPreview(ff, 1 - pi);
+                _renderTabs(1 - pi);
+              }
+              // 本侧若是预览模式也增量刷新
+              if (panel.previewMode) _refreshPreview(ff, pi);
             }
           }
         }),
@@ -499,9 +835,23 @@ const Editor = (() => {
       ext.push(syntaxHighlighting(hlStyle));
 
       const lang = await _lang(file.ext || ''); if (lang) ext.push(lang);
+      if (_getWordWrap()) ext.push(EditorView.lineWrapping);
       ext.push(_theme(EditorView));
 
       p.cmView = new EditorView({ doc: file.content, extensions: ext, parent });
+      // 恢复滚动位置（双 rAF 确保 CM6 完成布局后再滚动）
+      if (file._scrollTop !== undefined || file._scrollLeft !== undefined) {
+        const st = file._scrollTop || 0, sl = file._scrollLeft || 0;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const v = p.cmView;
+            if (v && v.scrollDOM) {
+              if (st) v.scrollDOM.scrollTop = st;
+              if (sl) v.scrollDOM.scrollLeft = sl;
+            }
+          });
+        });
+      }
       _bindCtx(parent, pi);
     } catch (e) {
       console.error('[Editor] CM6 失败:', e);
@@ -511,7 +861,8 @@ const Editor = (() => {
 
   function _fallback(parent, content, pIdx) {
     const pi = (pIdx !== undefined) ? pIdx : activePanel;
-    parent.innerHTML = `<div class="editor-body"><div class="editor-gutter" id="editorGutter${pi}"></div><textarea class="editor-textarea" id="editorTextarea${pi}" spellcheck="false">${_esc(content)}</textarea></div>`;
+    const wrapCls = _getWordWrap() ? ' wrap' : '';
+    parent.innerHTML = `<div class="editor-body"><div class="editor-gutter" id="editorGutter${pi}"></div><textarea class="editor-textarea${wrapCls}" id="editorTextarea${pi}" spellcheck="false">${_esc(content)}</textarea></div>`;
     const ta = parent.querySelector('#editorTextarea' + pi), g = parent.querySelector('#editorGutter' + pi);
     if (!ta) return;
     const up = () => {
@@ -556,11 +907,13 @@ const Editor = (() => {
     const p = panels[pi];
     const f = p.activeFileIndex >= 0 ? p.openFiles[p.activeFileIndex] : null;
     const canPreview = f && (f.ext === 'md' || f.ext === 'html');
+    const wrapOn = _getWordWrap();
 
     const items = [];
     items.push({ label: '保存', action: () => saveFile(pi) });
     if (canPreview) items.push({ label: p.previewMode ? '返回编辑' : '预览', action: () => togglePreview(pi) });
     items.push({ sep: true });
+    items.push({ label: wrapOn ? '自动换行 ✓' : '自动换行', action: () => toggleWordWrap(pi) });
     items.push({ label: '关闭文件', action: () => closeFile(p.activeFileIndex, pi) });
 
     App.showContextMenu(x, y, items);
@@ -592,6 +945,17 @@ const Editor = (() => {
     });
   }
 
+  function _getWordWrap() {
+    return localStorage.getItem('lubia_editor_word_wrap') !== 'false'; // 默认开启
+  }
+
+  function toggleWordWrap(pIdx) {
+    const current = _getWordWrap();
+    localStorage.setItem('lubia_editor_word_wrap', current ? 'false' : 'true');
+    _toast(current ? '已关闭自动换行' : '已开启自动换行', 'info');
+    refreshUI(pIdx);
+  }
+
   function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
   function _toast(msg, type) { if (typeof App !== 'undefined' && App.showToast) App.showToast(msg, type); }
 
@@ -599,7 +963,7 @@ const Editor = (() => {
   return {
     mount, destroy,
     openFile, openFileInSide, openBinary, openFileInPanel,
-    switchFile, closeFile, saveFile, togglePreview,
+    switchFile, closeFile, saveFile, togglePreview, toggleWordWrap,
     toggleSplit, focusPanel,
     refresh, refreshUI,
     getOpenFiles: () => panels[activePanel].openFiles,

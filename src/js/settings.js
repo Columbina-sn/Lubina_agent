@@ -167,16 +167,23 @@ const Settings = (() => {
 
   function _renderPreferences(container) {
     const theme = localStorage.getItem('lubia_theme') || 'auto';
+    const fontSize = localStorage.getItem('lubia_font_size') || '1.0';
     const maxTurns = localStorage.getItem('lubia_max_turns') || '15';
     const maxLoopRounds = localStorage.getItem('lubia_max_loop_rounds') || '8';
     const maxLoopRoundsPlan = localStorage.getItem('lubia_max_loop_rounds_plan') || '15';
-    const fontSize = localStorage.getItem('lubia_font_size') || '1.0';
+    const tabMinWidth = localStorage.getItem('lubia_editor_tab_min_width') || '60';
+    const tabMaxWidth = localStorage.getItem('lubia_editor_tab_max_width') || '150';
+    const tabMaxCount = localStorage.getItem('lubia_editor_tab_max_count') || '10';
+    const tabClosePolicy = localStorage.getItem('lubia_editor_tab_close_policy') || 'lru';
+    const wordWrap = localStorage.getItem('lubia_editor_word_wrap') !== 'false';
 
     container.innerHTML = `
       <div class="settings-section-header">
-        <h3>偏好选项</h3>
-        <p class="section-desc">调整应用外观和对话行为（修改即时生效）</p>
+        <h3>偏好设置</h3>
+        <p class="section-desc">调整应用外观、AI 对话行为和编辑器选项（修改即时生效）</p>
       </div>
+
+      <div class="prefs-group-title">外观</div>
       <div class="settings-card">
         <div class="form-group">
           <label>主题</label>
@@ -200,7 +207,9 @@ const Settings = (() => {
           </div>
         </div>
       </div>
-      <div class="settings-card" style="margin-top:14px;">
+
+      <div class="prefs-group-title">AI 对话</div>
+      <div class="settings-card">
         <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
           <div>
             <label style="margin:0;">最大对话轮数</label>
@@ -228,6 +237,62 @@ const Settings = (() => {
           </div>
           <input type="number" class="input" id="settingMaxLoopRoundsPlan" value="${maxLoopRoundsPlan}" min="12" max="25" style="width:80px;"
                  onchange="Settings.onMaxLoopRoundsPlanChange(this.value)">
+        </div>
+      </div>
+
+      <div class="prefs-group-title">文件编辑器</div>
+      <div class="settings-card">
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">标签页最小宽度</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">标签页宽度下限（px），超出用省略号</p>
+          </div>
+          <input type="number" class="input" id="settingTabMinWidth" value="${tabMinWidth}" min="40" max="120" style="width:80px;"
+                 onchange="Settings.onTabMinWidthChange(this.value)">
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">标签页最大宽度</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">标签页宽度上限（px）</p>
+          </div>
+          <input type="number" class="input" id="settingTabMaxWidth" value="${tabMaxWidth}" min="80" max="250" style="width:80px;"
+                 onchange="Settings.onTabMaxWidthChange(this.value)">
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">标签页数量上限</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">超过时自动关闭最早打开的文件（含分页）</p>
+          </div>
+          <input type="number" class="input" id="settingTabMaxCount" value="${tabMaxCount}" min="5" max="20" style="width:80px;"
+                 onchange="Settings.onTabMaxCountChange(this.value)">
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">标签页关闭策略</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">超限时的自动关闭顺序：LRU（最久未用）/ FIFO（最早打开）</p>
+          </div>
+          <select class="input" id="settingTabClosePolicy" style="width:100px;" onchange="Settings.onTabClosePolicyChange(this.value)">
+            <option value="lru" ${tabClosePolicy === 'lru' ? 'selected' : ''}>LRU</option>
+            <option value="fifo" ${tabClosePolicy === 'fifo' ? 'selected' : ''}>FIFO</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-card" style="margin-top:14px;">
+        <div class="form-group" style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+          <div>
+            <label style="margin:0;">自动换行</label>
+            <p style="margin:2px 0 0 0;font-size:0.72rem;color:var(--text-tip);">代码行超出编辑器宽度时自动折行显示</p>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="settingWordWrap" ${wordWrap ? 'checked' : ''} onchange="Settings.onWordWrapChange(this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>
       <div class="form-actions" style="margin-top:20px;">
@@ -266,12 +331,52 @@ const Settings = (() => {
     configAPI.set('max_loop_rounds_plan', String(v)).catch(() => {});
   }
 
+  function onTabMinWidthChange(value) {
+    const v = Math.max(40, Math.min(120, parseInt(value) || 60));
+    localStorage.setItem('lubia_editor_tab_min_width', v);
+    document.documentElement.style.setProperty('--tab-min-width', v + 'px');
+  }
+
+  function onTabMaxWidthChange(value) {
+    const v = Math.max(80, Math.min(250, parseInt(value) || 150));
+    localStorage.setItem('lubia_editor_tab_max_width', v);
+    document.documentElement.style.setProperty('--tab-max-width', v + 'px');
+  }
+
+  function onTabMaxCountChange(value) {
+    const v = Math.max(5, Math.min(20, parseInt(value) || 10));
+    localStorage.setItem('lubia_editor_tab_max_count', v);
+  }
+
+  function onTabClosePolicyChange(value) {
+    localStorage.setItem('lubia_editor_tab_close_policy', value || 'lru');
+  }
+
+  function onWordWrapChange(checked) {
+    localStorage.setItem('lubia_editor_word_wrap', checked ? 'true' : 'false');
+    // 如果当前在编辑器页面，刷新以应用新设置
+    if (typeof Editor !== 'undefined' && Editor.refreshUI) Editor.refreshUI();
+    _showToast(checked ? '已开启自动换行' : '已关闭自动换行', 'info');
+  }
+
+  function _applyEditorTabSettings() {
+    const minW = localStorage.getItem('lubia_editor_tab_min_width') || '60';
+    const maxW = localStorage.getItem('lubia_editor_tab_max_width') || '150';
+    document.documentElement.style.setProperty('--tab-min-width', minW + 'px');
+    document.documentElement.style.setProperty('--tab-max-width', maxW + 'px');
+  }
+
   function restoreDefaults() {
     localStorage.setItem('lubia_theme', 'auto');
     localStorage.setItem('lubia_font_size', '1.0');
     localStorage.setItem('lubia_max_turns', '15');
     localStorage.setItem('lubia_max_loop_rounds', '8');
     localStorage.setItem('lubia_max_loop_rounds_plan', '15');
+    localStorage.setItem('lubia_editor_tab_min_width', '60');
+    localStorage.setItem('lubia_editor_tab_max_width', '150');
+    localStorage.setItem('lubia_editor_tab_max_count', '10');
+    localStorage.setItem('lubia_editor_tab_close_policy', 'lru');
+    localStorage.setItem('lubia_editor_word_wrap', 'true');
     configAPI.set('max_turns', '15').catch(() => {});
     configAPI.set('max_loop_rounds', '8').catch(() => {});
     configAPI.set('max_loop_rounds_plan', '15').catch(() => {});
@@ -279,6 +384,7 @@ const Settings = (() => {
       App.applyTheme('auto');
       App.applyFontSize(1.0);
     }
+    _applyEditorTabSettings();
     _renderSection('preferences');
     _showToast('已恢复默认设置', 'info');
   }
@@ -680,24 +786,32 @@ const Settings = (() => {
   function showAddModel(providerId) {
     const modelList = document.getElementById('modelList');
     if (!modelList) return;
+    // 防止重复点击堆积输入框
+    if (modelList.querySelector('.model-item-add')) return;
     const addRow = document.createElement('div');
     addRow.className = 'model-item model-item-add';
     addRow.innerHTML = `
-      <input type="text" class="input" id="newModelName" placeholder="模型名称，如 gpt-4o" style="flex:1;">
+      <input type="text" class="input" id="newModelDisplayName" placeholder="昵称" style="flex:1;">
+      <input type="text" class="input" id="newModelName" placeholder="模型名" style="flex:1.5;">
       <button class="btn btn-primary btn-sm" onclick="Settings.addModel('${providerId}')">确认</button>
       <button class="btn btn-ghost btn-sm" onclick="this.closest('.model-item').remove()">取消</button>
     `;
     modelList.insertBefore(addRow, modelList.firstChild);
-    setTimeout(() => document.getElementById('newModelName')?.focus(), 50);
+    setTimeout(() => document.getElementById('newModelDisplayName')?.focus(), 50);
   }
 
   async function addModel(providerId) {
+    const displayEl = document.getElementById('newModelDisplayName');
     const nameEl = document.getElementById('newModelName');
+    const displayName = displayEl?.value?.trim();
     const modelName = nameEl?.value?.trim();
-    if (!modelName) { _showToast('请输入模型名称', 'error'); return; }
+    if (!modelName) { _showToast('请输入模型名', 'error'); return; }
 
     try {
-      await api.post(`/api/providers/${providerId}/models`, { model_name: modelName });
+      await api.post(`/api/providers/${providerId}/models`, {
+        model_name: modelName,
+        display_name: displayName || modelName,
+      });
       await _fetchProviders();
       _renderProviderDetail(providerId);
     } catch (err) {
@@ -744,7 +858,296 @@ const Settings = (() => {
   function _renderUsage(container) {
     container.innerHTML = `
       <div class="settings-section-header"><h3>用量统计</h3><p class="section-desc">API 调用次数和 Token 消耗</p></div>
-      <div class="settings-card"><p style="color:var(--text-sub);text-align:center;padding:20px;">用量统计功能开发中…</p></div>`;
+      <div class="settings-card" style="overflow:visible;">
+        <div id="usageStatsContainer">
+          <div class="usage-loading">加载中…</div>
+        </div>
+      </div>
+      <div class="usage-disclaimer">*Token 用量为中英文混合估算值（中文~1.3字符/token，英文~4字符/token），若供应商返回实际值则优先使用。与实际账单可能不同。</div>`;
+    _loadUsageStats('7d');
+  }
+
+  // ── 用量统计内部方法 ──
+
+  let _usageTooltip = null;
+  let _barTooltipEl = null;  // 柱状图独立浮层
+
+  function _getUsageTooltip() {
+    if (!_usageTooltip) {
+      _usageTooltip = document.createElement('div');
+      _usageTooltip.className = 'usage-tooltip';
+      document.body.appendChild(_usageTooltip);
+    }
+    return _usageTooltip;
+  }
+
+  function _showUsageTooltip(el) {
+    const tip = el.getAttribute('data-tip');
+    if (!tip) return;
+    const tt = _getUsageTooltip();
+    tt.innerHTML = tip.replace(/\n/g, '<br>');
+    tt.style.display = 'block';
+    // 先显示才能读 offsetWidth
+    const rect = el.getBoundingClientRect();
+    let left = rect.left + rect.width / 2;
+    let top = rect.top;
+    // 防止溢出窗口
+    const ttW = tt.offsetWidth || 160;
+    const ttH = tt.offsetHeight || 32;
+    if (left - ttW / 2 < 4) left = ttW / 2 + 4;
+    if (left + ttW / 2 > window.innerWidth - 4) left = window.innerWidth - ttW / 2 - 4;
+    if (top - ttH < 4) top = rect.bottom + 4;  // 上方不够就翻到下方
+    tt.style.left = left + 'px';
+    tt.style.top = top + 'px';
+  }
+
+  function _hideUsageTooltip() {
+    if (_usageTooltip) _usageTooltip.style.display = 'none';
+  }
+
+  function _showBarTooltip(el) {
+    if (!_barTooltipEl) {
+      _barTooltipEl = document.createElement('div');
+      _barTooltipEl.className = 'usage-bar-tooltip';
+      document.body.appendChild(_barTooltipEl);
+    }
+    const tip = el.getAttribute('data-bar-tip');
+    if (!tip) return;
+    _barTooltipEl.innerHTML = tip.replace(/\n/g, '<br>');
+    _barTooltipEl.style.display = 'block';
+  }
+
+  function _hideBarTooltip() {
+    if (_barTooltipEl) _barTooltipEl.style.display = 'none';
+  }
+
+  async function _loadUsageStats(period) {
+    const container = document.getElementById('usageStatsContainer');
+    if (!container) return;
+
+    try {
+      const [periodData, heatData] = await Promise.all([
+        api.get(`/api/usage/stats?period=${period}`),
+        api.get('/api/usage/stats?period=385d'),
+      ]);
+      _renderUsageContent(container, periodData, heatData, period);
+    } catch (e) {
+      container.innerHTML = '<p class="usage-error">加载失败：无法连接后端</p>';
+    }
+  }
+
+  function _renderUsageContent(container, periodData, heatData, period) {
+    const { daily, total, today } = periodData;
+    const days = daily.length;
+
+    function fmtTok(n) { return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n); }
+    function fmtNum(n) { return n >= 1000 ? n.toLocaleString() : String(n); }
+
+    // ── 时期按钮 ──
+    const periods = [
+      { key: '7d', label: '近7天' }, { key: '30d', label: '近30天' },
+      { key: 'this_week', label: '本周' }, { key: 'this_month', label: '本月' },
+    ];
+    const periodBtns = periods.map(p =>
+      `<button class="usage-period-btn ${p.key === period ? 'active' : ''}" onclick="Settings._switchUsagePeriod('${p.key}')">${p.label}</button>`
+    ).join('');
+
+    // ── 热力图：55列×7行 = 385天 ──
+    let heatHTML = _buildHeatmap(heatData.daily);
+
+    // ── 统计卡片（含今日输入/输出分离）──
+    const avgDailyTokens = days > 0 ? Math.round(total.tokens / days) : 0;
+    const avgDailyCalls = days > 0 ? (total.calls / days).toFixed(1) : '0';
+
+    const cardsHTML = `
+      <div class="usage-stat-cards">
+        <div class="usage-stat-card">
+          <div class="usage-stat-value">${fmtTok(today.tokens)}<span class="usage-stat-unit"> tokens</span></div>
+          <div class="usage-stat-label">今日用量</div>
+          <div class="usage-stat-detail"><span class="u-in">输入 ${fmtTok(today.input_tokens)}</span><span class="u-out">输出 ${fmtTok(today.output_tokens)}</span></div>
+        </div>
+        <div class="usage-stat-card">
+          <div class="usage-stat-value">${fmtTok(total.tokens)}<span class="usage-stat-unit"> tokens</span></div>
+          <div class="usage-stat-label">总计 · ${total.calls}次调用</div>
+          <div class="usage-stat-detail"><span class="u-in">输入 ${fmtTok(total.input_tokens)}</span><span class="u-out">输出 ${fmtTok(total.output_tokens)}</span></div>
+        </div>
+        <div class="usage-stat-card">
+          <div class="usage-stat-value">${fmtTok(avgDailyTokens)}<span class="usage-stat-unit"> /天</span></div>
+          <div class="usage-stat-label">日均 Token · ${avgDailyCalls}次调用</div>
+        </div>
+      </div>`;
+
+    // ── 柱状图 ──
+    const maxDayTokens = Math.max(...daily.map(d => d.input_tokens + d.output_tokens), 1);
+    const chartMaxY = Math.ceil(maxDayTokens / 0.7);  // 最高柱只占70%
+    const barAreaH = 305;  // 柱状图可视区高度（像素）
+
+    let barHTML = '';
+    for (let i = 0; i < daily.length; i++) {
+      const d = daily[i];
+      const totalDay = d.input_tokens + d.output_tokens;
+      // 输出在下（酒红）、输入在上（主题色），零值不占高度
+      const outH = chartMaxY > 0 ? Math.round((d.output_tokens / chartMaxY) * barAreaH) : 0;
+      const inH = chartMaxY > 0 ? Math.round((d.input_tokens / chartMaxY) * barAreaH) : 0;
+      const stackH = outH + inH;
+      const parts = d.date.split('-');
+      const label = parseInt(parts[1]) + '/' + parseInt(parts[2]);
+      const tip = d.date + '<br>输入 ' + fmtTok(d.input_tokens) + ' + 输出 ' + fmtTok(d.output_tokens) + ' = ' + fmtTok(totalDay) + ' tokens<br>' + d.calls + '次调用';
+      barHTML += `<div class="usage-bar-col">
+        <div class="usage-bar-stack" style="height:${stackH}px;" data-bar-tip="${tip}">
+          <div class="usage-bar-in" style="height:${inH}px;"></div>
+          <div class="usage-bar-out" style="height:${outH}px;"></div>
+        </div>
+        <div class="usage-bar-label">${label}</div>
+      </div>`;
+    }
+
+    // ── Y 轴刻度标注 ──
+    let yAxisHTML = '';
+    const ySteps = 4;
+    for (let i = 0; i <= ySteps; i++) {
+      const val = Math.round(chartMaxY * (ySteps - i) / ySteps);
+      yAxisHTML += `<div class="usage-y-tick">${fmtTok(val)}</div>`;
+    }
+
+    container.innerHTML = `
+      <div class="usage-period-bar">${periodBtns}</div>
+      ${cardsHTML}
+      <div class="usage-heatmap-label">过去 385 天</div>
+      ${heatHTML}
+      <div class="usage-chart-wrap">
+        <div class="usage-y-axis">${yAxisHTML}</div>
+        <div class="usage-bar-chart">${barHTML}</div>
+      </div>`;
+
+    // 绑定热力图 tooltip
+    container.querySelectorAll('.usage-heat-cell[data-tip]').forEach(el => {
+      el.addEventListener('mouseenter', () => _showUsageTooltip(el));
+      el.addEventListener('mouseleave', () => _hideUsageTooltip());
+    });
+
+    // 绑定柱状图浮层 — 每个柱子独立处理，防止溢出窗口
+    container.querySelectorAll('.usage-bar-stack').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        _showBarTooltip(el);
+        const rect = el.getBoundingClientRect();
+        if (_barTooltipEl) {
+          const ttW = _barTooltipEl.offsetWidth || 180;
+          const ttH = _barTooltipEl.offsetHeight || 40;
+          let left = rect.left + rect.width / 2;
+          let top = rect.top - 8;
+          if (left - ttW / 2 < 4) left = ttW / 2 + 4;
+          if (left + ttW / 2 > window.innerWidth - 4) left = window.innerWidth - ttW / 2 - 4;
+          if (top - ttH < 4) top = rect.bottom + 4;
+          _barTooltipEl.style.left = left + 'px';
+          _barTooltipEl.style.top = top + 'px';
+        }
+      });
+      el.addEventListener('mouseleave', () => _hideBarTooltip());
+    });
+  }
+
+  function _buildHeatmap(daily) {
+    if (!daily || daily.length === 0) return '<p class="usage-empty">暂无数据</p>';
+
+    const COLS = 55;
+    const ROWS = 7;
+    const TOTAL = COLS * ROWS;
+
+    // ── 工具：本地日期（不用 toISOString 避免 UTC 时区偏差）──
+    function _localDateStr(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    // 日期 → 数据映射
+    const map = {};
+    daily.forEach(d => { map[d.date] = d; });
+
+    function fmtTok(n) { return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n); }
+
+    // ── 按网格位置分配日期：右下角 = 今天，向上 = 昨天……逐列左移（纵填）──
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const cells = new Array(TOTAL);
+    const monthCols = new Set();
+    const monthLabels = {};  // col → "7月"
+
+    for (let gridRow = 0; gridRow < ROWS; gridRow++) {
+      for (let gridCol = 0; gridCol < COLS; gridCol++) {
+        // 列优先：右列最新，每列从下往上倒推
+        const daysAgo = (COLS - 1 - gridCol) * ROWS + (ROWS - 1 - gridRow);
+        const flatIdx = gridRow * COLS + gridCol;
+
+        const d = new Date(today);
+        d.setDate(d.getDate() - daysAgo);
+        const ds = _localDateStr(d);
+        const data = map[ds];
+
+        // 记录月初列
+        if (d.getDate() === 1) {
+          monthCols.add(gridCol);
+          monthLabels[gridCol] = (d.getMonth() + 1) + '月';
+        }
+
+        cells[flatIdx] = {
+          date: ds,
+          val: data ? data.input_tokens + data.output_tokens : 0,
+          calls: data ? data.calls : 0,
+          hasData: !!(data && (data.input_tokens + data.output_tokens) > 0),
+        };
+      }
+    }
+
+    // ── 月份标签行 ──
+    let labelRow = '<div class="usage-heat-labels">';
+    for (let c = 0; c < COLS; c++) {
+      if (monthLabels[c] !== undefined) {
+        labelRow += `<div class="usage-heat-label">${monthLabels[c]}</div>`;
+      } else {
+        labelRow += '<div class="usage-heat-label"></div>';
+      }
+    }
+    labelRow += '</div>';
+
+    // ── 热力图格子 ──
+    let grid = '<div class="usage-heat-grid">';
+    for (let i = 0; i < TOTAL; i++) {
+      const cell = cells[i];
+      const col = i % COLS;
+      const isMonthCol = monthCols.has(col);
+
+      let cls = 'usage-heat-cell';
+      if (isMonthCol) cls += ' month-col';
+
+      let style = '';
+      if (!cell.hasData) {
+        cls += ' empty';
+      } else {
+        // 非均匀映射：下限 40%（保证和空格子明显区分），120万 → 100%
+        const opacity = 0.40 + 0.60 * Math.pow(Math.min(cell.val, 1200000) / 1200000, 0.35);
+        const clamped = Math.min(1, Math.max(0.40, opacity));
+        const pct = Math.round(clamped * 100);
+        style = `background-color:color-mix(in srgb,var(--primary) ${pct}%,transparent);`;
+      }
+
+      const parts = cell.date.split('-');
+      const tip = cell.hasData
+        ? `${parts[0]}年${parseInt(parts[1])}月${parseInt(parts[2])}日 · ${fmtTok(cell.val)} tokens · ${cell.calls}次调用`
+        : `${parts[0]}年${parseInt(parts[1])}月${parseInt(parts[2])}日 · 无使用`;
+
+      grid += `<div class="${cls}" style="${style}" data-tip="${tip}"></div>`;
+    }
+    grid += '</div>';
+
+    return labelRow + grid;
+  }
+
+  function _switchUsagePeriod(period) {
+    _loadUsageStats(period);
   }
 
   function _renderAbout(container) {
@@ -851,7 +1254,10 @@ const Settings = (() => {
     saveProviderDetail, toggleProvider, confirmDeleteProvider,
     showAddModel, addModel, toggleModel, deleteModel,
     onThemeChange, onFontSizeInput, onMaxTurnsChange, onMaxLoopRoundsChange, onMaxLoopRoundsPlanChange, restoreDefaults,
+    onTabMinWidthChange, onTabMaxWidthChange, onTabMaxCountChange, onTabClosePolicyChange, onWordWrapChange,
+    _applyEditorTabSettings,
     onKbModelChange, _loadKbModelSelector,
     openExternal, openCodeMirrorSite, toggleVisible,
+    _switchUsagePeriod,
   };
 })();

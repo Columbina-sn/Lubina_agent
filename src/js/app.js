@@ -36,6 +36,8 @@ const App = (() => {
 
     restoreTheme();
     restoreFontSize();
+    // 应用编辑器标签页 CSS 变量
+    if (typeof Settings !== 'undefined' && Settings._applyEditorTabSettings) Settings._applyEditorTabSettings();
     bindActivityBar();
     bindShellHandles();
     bindGlobalEvents();
@@ -73,10 +75,11 @@ const App = (() => {
   }
 
   // ===== 页面 =====
-  async function showPage(id) {
+  async function showPage(id, options) {
     // 已经在目标页面 → 编辑器页面时切换文件树，其他页面不做任何操作
+    // options.noToggle=true 时抑制文件树切换（文件树打开文件时使用）
     if (state.rendered && id === state.activePage) {
-      if (id === 'editor') toggleFileExplorer();
+      if (id === 'editor' && !options?.noToggle) toggleFileExplorer();
       return;
     }
     if (id === 'home') { state.unreadCount = 0; }
@@ -379,7 +382,7 @@ const App = (() => {
             <div class="settings-nav" id="settingsNav">
               <div class="settings-nav-item active" data-section="preferences" onclick="Settings.switchSection('preferences')">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                <span>偏好选项</span>
+                <span>偏好设置</span>
               </div>
               <div class="settings-nav-item" data-section="providers" onclick="Settings.switchSection('providers')">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -517,11 +520,13 @@ const App = (() => {
   function showToast(msg, type) {
     const container = document.getElementById('toastContainer');
     if (!container) return;
+    // 上限 5 个，超出销毁最早的（container.children 是实时 HTMLCollection）
+    while (container.children.length >= 5) { container.firstElementChild.remove(); }
     const toast = document.createElement('div');
     toast.className = `toast toast-${type || 'info'}`;
     toast.textContent = msg;
     container.appendChild(toast);
-    setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s'; setTimeout(() => toast.remove(), 300); }, 2500);
+    setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.25s'; setTimeout(() => toast.remove(), 250); }, 2800);
   }
 
   return {

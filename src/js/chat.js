@@ -191,8 +191,14 @@ const Chat = (() => {
     _showConfirmModal(`确定要删除「${name}」吗？`, '删除后无法恢复。', () => {
       // Abort 正在生成的目标对话
       if (conv.abortController) { conv.abortController.abort(); conv.abortController = null; }
+      const wasActive = activeConversationId === id;
       conversations = conversations.filter(c => c.id !== id);
-      if (activeConversationId === id) activeConversationId = conversations[0]?.id || null;
+      if (wasActive) {
+        activeConversationId = conversations[0]?.id || null;
+        // 清空消息容器，防止 _switchConversation 的 early-return 跳过渲染
+        const container = document.getElementById('messageContainer');
+        if (container) container.innerHTML = '';
+      }
       _saveToStorage(); _renderConversationList();
       if (activeConversationId) _switchConversation(activeConversationId);
       else { const nc = _createConversation('新对话'); _renderConversationList(); _switchConversation(nc.id); }
@@ -354,13 +360,23 @@ const Chat = (() => {
 
     // ── 路径 A：对话正在生成 → 消息入队 ──
     if (conv.isGenerating) {
+      console.debug('[chat] 消息入队 | 队列长度=' + (conv._queue.length + 1) + ' | 内容=' + content.trim().slice(0, 40));
       conv._queue.push({ content: content.trim(), timestamp: Date.now() });
       _appendQueuedMessage(content.trim());
       _saveToStorage();
+      // 注入后端 ReAct 循环（如果有 session_id）
+      if (conv.sessionId) {
+        _injectMessage(conv.sessionId, content.trim());
+      }
       return;
     }
 
+    console.debug('[chat] 消息发送 | 模式=' + chatMode + ' | 模型=' + chatModelName);
     // ── 路径 B：正常发送 ──
+    // 生成会话 ID（用于排队消息注入）
+    if (!conv.sessionId) {
+      conv.sessionId = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    }
     // 添加用户消息
     conv.messages.push({ role: 'user', type: 'user', content: content.trim(), timestamp: Date.now() });
     if (conv.messages.filter(m => m.role === 'user').length === 1) {
@@ -456,11 +472,13 @@ const Chat = (() => {
         providerId: conv.providerId,
         model: conv.model,
         mode: conv.mode,
+        sessionId: conv.sessionId || '',
         onDelta: (delta) => {
           _silentMode = false;
           if (aiMsg.thinking) {
             aiMsg.thinking = false;
             aiMsg.thinkingTime = _fmtThinking((Date.now() - aiMsg.startTime) / 1000);
+            console.debug('[chat] 首次响应 | 思考耗时=' + aiMsg.thinkingTime);
             _renderMessages(conv.messages);
           }
           if (!conv.messages.includes(aiMsg)) {
@@ -481,11 +499,13 @@ const Chat = (() => {
           // 同组工具连续调用 → 静默，不弹气泡
           const group = _TOOL_GROUPS[event.tool] || event.tool;
           if (group === _lastReadGroup) {
+            console.debug('[chat] 工具静默 | ' + event.tool + ' (组=' + group + ' 连续重复)');
             _silentMode = true;
             return;
           }
           _silentMode = false;
           _lastReadGroup = group;
+          console.debug('[chat] 工具调用气泡 | ' + event.tool + ' | 参数=' + JSON.stringify(event.args || {}).slice(0, 100));
 
           // 移除 AI 占位，插调用气泡
           const idx = conv.messages.indexOf(aiMsg);
@@ -502,7 +522,11 @@ const Chat = (() => {
           _scrollToBottom();
         },
         onToolResult: (event) => {
-          if (_silentMode) return;  // 静默模式不弹成功气泡
+          if (_silentMode) {
+            console.debug('[chat] 工具结果静默 | ' + event.tool + ' (静默模式)');
+            return;  // 静默模式不弹成功气泡
+          }
+          console.debug('[chat] 工具结果气泡 | ' + event.tool + ' | 结果=' + (event.result || '').slice(0, 60));
           const { human } = _toolLabel(event.tool, event.args, true);
           conv.messages.push({
             role: 'assistant', type: 'tool_result',
@@ -524,6 +548,7 @@ const Chat = (() => {
           }
         },
         onToolError: (event) => {
+          console.debug('[chat] 工具错误 | ' + event.tool + ' | 错误=' + (event.error || '').slice(0, 100));
           _silentMode = false;
           conv.messages.push({
             role: 'assistant', type: 'tool_error_msg',
@@ -537,7 +562,24 @@ const Chat = (() => {
         onMaxRounds: (max) => {
           aiMsg.maxRoundsReached = max;
         },
+        onUserInjected: (event) => {
+          // 将 DOM 中最后 N 个排队气泡转为正常用户气泡
+          const container = document.getElementById('messageContainer');
+          if (!container) return;
+          const queuedRows = container.querySelectorAll('.message-row.user.queued');
+          const injectedCount = event.messages?.length || 0;
+          let i = 0;
+          queuedRows.forEach(row => {
+            if (i < injectedCount) {
+              row.classList.remove('queued');
+              const indicator = row.querySelector('.queue-indicator');
+              if (indicator) indicator.remove();
+              i++;
+            }
+          });
+        },
         onDone: () => {
+          console.debug('[chat] ReAct完成 | 内容长=' + aiMsg.content.length + '字符 | 队列=' + (conv._queue?.length || 0) + '条');
           if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
           aiMsg.thinking = false;
           aiMsg.streaming = false;
@@ -581,7 +623,15 @@ const Chat = (() => {
       if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
       aiMsg.thinking = false;
       aiMsg.type = 'error';
-      aiMsg.content = `错误：${err.message || '请求失败'}`;
+      // 给常见网络错误更友好的中文提示
+      const errMsg = err.message || '';
+      if (errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError')) {
+        aiMsg.content = '网络连接失败，请检查网络后重试。';
+      } else if (errMsg.includes('timeout') || errMsg.includes('Timeout')) {
+        aiMsg.content = '请求超时，AI 服务器响应过慢，请稍后重试。';
+      } else {
+        aiMsg.content = `错误：${errMsg || '请求失败'}`;
+      }
       aiMsg.streaming = false;
       conv.isGenerating = false;
       conv.abortController = null;
@@ -593,6 +643,23 @@ const Chat = (() => {
   }
 
   // ===== 消息队列 =====
+
+  /** 将排队消息注入后端 ReAct 循环 */
+  async function _injectMessage(sessionId, content) {
+    try {
+      await fetch(`${API_BASE}/api/chat/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          messages: [{ content, timestamp: Date.now() }],
+        }),
+      });
+      console.debug('[chat] 注入后端 | session=' + sessionId.slice(0, 8) + '… | 内容=' + content.slice(0, 30));
+    } catch (e) {
+      console.debug('[chat] 注入失败（后端可能不可用）: ' + e.message);
+    }
+  }
 
   /** 在 UI 末尾追加排队气泡（仅视觉，不加入 conv.messages） */
   function _appendQueuedMessage(content) {
@@ -608,10 +675,11 @@ const Chat = (() => {
     _scrollToBottom();
   }
 
-  /** 消费排队消息：加入对话 → 统一发送 */
+  /** 消费排队消息：将 DOM 中的排队气泡转为正式气泡 → 继续发送 */
   function _flushQueue(conv) {
     if (!conv._queue || conv._queue.length === 0) return;
 
+    console.debug('[chat] 刷新队列 | 排队消息=' + conv._queue.length + '条');
     const queued = conv._queue.splice(0);
 
     // 将排队消息正式加入对话
@@ -619,9 +687,16 @@ const Chat = (() => {
       conv.messages.push({ role: 'user', type: 'user', content: q.content, timestamp: q.timestamp });
     });
 
-    // 重建整个消息列表（排队气泡 → 正式气泡）
-    _renderMessages(conv.messages);
-    _scrollToBottom();
+    // 转换 DOM 中的排队气泡为正式气泡（不重建整个视图，避免闪烁）
+    const container = document.getElementById('messageContainer');
+    if (container) {
+      const queuedRows = container.querySelectorAll('.message-row.user.queued');
+      queuedRows.forEach(row => {
+        row.classList.remove('queued');
+        const indicator = row.querySelector('.queue-indicator');
+        if (indicator) indicator.remove();
+      });
+    }
 
     // 构建完整上下文（含所有排队用户消息）
     const aiMsg = { role: 'assistant', type: 'info', content: '', timestamp: Date.now(), streaming: true, thinking: true, startTime: Date.now() };
@@ -662,14 +737,14 @@ const Chat = (() => {
   // ===== 流式 API 调用（Re-Act 模式，支持工具事件）=====
 
   async function _chatStream(options) {
-    const { messages, providerId, model, mode, onDelta, onDone, onError, onToolStart, onToolResult, onToolError, onMaxRounds } = options;
+    const { messages, providerId, model, mode, onDelta, onDone, onError, onToolStart, onToolResult, onToolError, onMaxRounds, onUserInjected } = options;
     const controller = new AbortController();
 
     try {
       const response = await fetch(`${API_BASE}/api/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true, sandbox_root: window.__lubia_workspace_root || null }),
+        body: JSON.stringify({ messages, provider_id: providerId, model, mode, stream: true, sandbox_root: window.__lubia_workspace_root || null, session_id: options.sessionId || '' }),
         signal: controller.signal,
       });
 
@@ -699,9 +774,13 @@ const Chat = (() => {
           const trimmed = line.trim();
           if (!trimmed || !trimmed.startsWith('data:')) continue;
           const data = trimmed.slice(5).trim();
-          if (data === '[DONE]') { onDone(); return controller; }
+          if (data === '[DONE]') { console.debug('[chat] SSE [DONE]'); onDone(); return controller; }
           try {
             const json = JSON.parse(data);
+            const evtType = json.type || (json.choices ? 'openai' : 'unknown');
+            if (evtType !== 'delta') {
+              console.debug('[chat] SSE事件 | type=' + evtType + (json.tool ? ' | tool=' + json.tool : '') + (json.error ? ' | error=' + json.error : ''));
+            }
 
             // ── Re-Act 事件分发（必须在 error 检查之前）──
             if (json.type === 'tool_start') {
@@ -717,6 +796,10 @@ const Chat = (() => {
               if (onMaxRounds) onMaxRounds(json.max);
             } else if (json.type === 'thinking') {
               // thinking 状态，前端 placeholder 已处理
+            } else if (json.type === 'user_injected') {
+              // 排队消息已被后端注入 ReAct 循环 → 去掉排队标记
+              console.debug('[chat] 消息已注入 | 条数=' + (json.messages?.length || 0));
+              if (onUserInjected) onUserInjected(json);
             } else if (json.type === 'done') {
               onDone(); return controller;
             } else if (json.error) {
@@ -758,12 +841,12 @@ const Chat = (() => {
       row.className = `message-row ${isUser ? 'user' : 'assistant'}`;
       row.setAttribute('data-index', index);
 
-      const showAvatar = isUser || (prevRole !== 'assistant');
+      const showAvatar = prevRole !== msg.role;  // 连续同角色不重复头像（用户和AI均适用）
       const avatarCls = showAvatar ? (isUser ? 'user' : 'ai') : 'ghost';
       const avatarLabel = isUser ? '你' : 'AI';
 
       if (isUser) {
-        row.innerHTML = `<div class="msg-avatar ${avatarCls}">${avatarLabel}</div><div class="msg-bubble user-bubble">${_esc(msg.content)}</div>`;
+        row.innerHTML = `<div class="msg-avatar ${avatarCls}">${avatarLabel}</div><div class="msg-bubble user-bubble">${_esc(msg.content).replace(/\n/g, '<br>')}</div>`;
       } else {
         row.innerHTML = `<div class="msg-avatar ${avatarCls}">${avatarLabel}</div><div class="msg-body">${_renderAIBubble(msg)}</div>`;
       }
@@ -841,10 +924,10 @@ const Chat = (() => {
         <div class="tool-result-human">${_esc(msg.toolResultHuman || msg.toolHuman || '')}</div>
       </div>`;
     }
-    // 工具错误气泡
+    // 工具错误气泡（使用独立 class，视觉上区分错误 vs 普通工具调用）
     if (type === 'tool_error_msg') {
-      return `<div class="msg-bubble ai-bubble ai-tool-call" style="border-color:var(--color-error);">
-        <div class="tool-call-detail" style="color:var(--color-error);">${_esc(msg.toolDetail || '工具出错')}</div>
+      return `<div class="msg-bubble ai-bubble ai-tool-error">
+        <div class="tool-error-detail">${_esc(msg.toolDetail || '工具出错')}</div>
       </div>`;
     }
 
@@ -1034,11 +1117,21 @@ const Chat = (() => {
           c.abortController = null;
           c._queue = [];
           // v6：错误恢复 —— 空内容的 assistant 消息标为 error
-          c.messages.forEach(m => {
+          c.messages.forEach((m, i) => {
             // 工具调用气泡无文本内容是正常的，不标为 error
             if (m.role === 'assistant' && !m.content?.trim() && m.type !== 'tool_call' && m.type !== 'tool_result') {
-              m.type = 'error';
-              m.content = '消息发送失败，未获取到 AI 回复。请检查网络连接后重试。';
+              // 检查此消息之前是否有成功的工具调用（说明 AI 确实执行了操作，只是回复文本丢失）
+              const hasPriorToolOps = c.messages.slice(0, i).some(
+                prior => prior.type === 'tool_call' || prior.type === 'tool_result'
+              );
+              if (hasPriorToolOps) {
+                // AI 完成了工具操作但回复文本未能保存（可能在流式传输中刷新了页面）
+                m.type = 'warning';
+                m.content = '（AI 已完成工具操作，但回复文本未能保存。可能是流式传输期间刷新了页面，请重试。）';
+              } else {
+                m.type = 'error';
+                m.content = '消息发送失败，未获取到 AI 回复。请检查网络连接后重试。';
+              }
             }
           });
         });

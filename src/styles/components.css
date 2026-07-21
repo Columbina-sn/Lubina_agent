@@ -426,29 +426,46 @@
   background: var(--editor-bg);
 }
 .editor-tabs {
-  display: flex; align-items: center; background: var(--bg-card);
-  border-bottom: 1px solid var(--border-card); height: 34px;
-  flex-shrink: 0; padding: 0 6px; gap: 2px; overflow-x: auto;
+  display: flex; align-items: flex-start; background: var(--bg-card);
+  border-bottom: 1px solid var(--border-card); min-height: 34px;
+  flex-shrink: 0; padding: 0; gap: 0;
 }
-.editor-tabs::-webkit-scrollbar { height: 0; }
+.editor-tabs-wrap {
+  flex: 1 1 0; display: flex; flex-wrap: wrap; gap: 2px;
+  padding: 2px 6px; min-width: 0;
+  align-content: flex-start;
+}
 .editor-tab {
   display: flex; align-items: center; gap: 5px; padding: 4px 12px;
   font-size: 0.8rem; color: var(--text-sub); background: transparent;
   border: none; border-radius: var(--radius-sm); cursor: pointer;
   white-space: nowrap; transition: all var(--transition-fast); font-family: inherit;
+  min-width: var(--tab-min-width, 60px); max-width: var(--tab-max-width, 150px);
+  flex-shrink: 1; overflow: hidden;
 }
+.editor-tab span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-tab:hover { background: var(--primary-light); color: var(--text-body); }
 .editor-tab.active { background: var(--primary-light); color: var(--primary); font-weight: 500; }
+.editor-tab .tab-indicator {
+  position: relative; width: 14px; height: 14px; flex-shrink: 0;
+}
 .editor-tab .tab-close {
+  position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  width: 14px; height: 14px; border-radius: 3px; font-size: 11px;
+  border-radius: 3px; font-size: 11px;
   opacity: 0; transition: opacity var(--transition-fast);
 }
 .editor-tab:hover .tab-close { opacity: 1; }
 .editor-tab .tab-close:hover { background: rgba(140,46,80,0.12); color: var(--accent); }
 .editor-tab .tab-modified {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--primary);
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 1; transition: opacity var(--transition-fast);
 }
+.editor-tab .tab-modified::after {
+  content: ''; display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--primary);
+}
+.editor-tab:hover .tab-modified { opacity: 0; }
 
 /* CM6 编辑器容器（替换旧 editor-body + editor-gutter + editor-textarea） */
 .editor-cm-wrapper {
@@ -461,7 +478,7 @@
 	/* ── tab 栏右侧操作区（预览切换 + 分屏按钮）── */
 	.editor-tabs-actions {
 	  display: flex; align-items: center; gap: 4px;
-	  margin-left: auto; padding-right: 4px; flex-shrink: 0;
+	  flex-shrink: 0; padding: 2px 6px 0 0;
 	}
 	.editor-action-btn {
 	  padding: 3px 8px; font-size: 0.72rem; font-weight: 500;
@@ -630,6 +647,13 @@
 .settings-section-header { margin-bottom: 18px; }
 .settings-section-header h3 { font-size: 1.2rem; color: var(--text-h1); margin-bottom: 2px; }
 .settings-section-header .section-desc { color: var(--text-sub); font-size: 0.82rem; }
+.prefs-group-title {
+  font-size: 0.78rem; font-weight: 600; color: var(--primary);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  margin: 22px 0 10px 0; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
+}
+.prefs-group-title:first-of-type { margin-top: 0; }
 
 /* 设置卡片 */
 .settings-card {
@@ -1018,6 +1042,20 @@ select.input {
   animation: toolPulseIn 0.3s var(--ease-out);
 }
 
+.msg-bubble.ai-tool-error {
+  background: rgba(201, 75, 107, 0.05);
+  border: 1px solid rgba(201, 75, 107, 0.18);
+  font-size: 0.8rem; padding: 8px 14px;
+  border-radius: 4px 14px 14px 14px;
+  animation: toolPulseIn 0.3s var(--ease-out);
+}
+
+.tool-error-detail {
+  font-family: "Cascadia Code","Fira Code","JetBrains Mono",monospace;
+  font-size: 0.72rem; color: var(--accent);
+  word-break: break-all;
+}
+
 @keyframes toolPulseIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -1039,3 +1077,185 @@ select.input {
   font-size: 0.82rem; color: var(--color-success);
   line-height: 1.5;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   用量统计 (Usage Stats) v2 — 55×7 热力图 + 输入/输出双色柱状图
+   ═══════════════════════════════════════════════════════════ */
+
+.usage-loading { text-align: center; padding: 20px; color: var(--text-sub); }
+.usage-error { text-align: center; padding: 20px; color: var(--accent); }
+.usage-empty { color: var(--text-sub); text-align: center; padding: 8px; font-size: 0.78rem; }
+
+/* ── 时段选择按钮 ── */
+
+.usage-period-bar {
+  display: flex; gap: 6px; margin-bottom: 14px;
+}
+.usage-period-btn {
+  padding: 4px 14px; border-radius: 14px; border: 1px solid var(--border-card);
+  background: transparent; color: var(--text-sub); font-size: 0.78rem;
+  cursor: pointer; transition: all var(--transition-fast);
+}
+.usage-period-btn:hover { border-color: var(--primary); color: var(--primary); }
+.usage-period-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* ── 统计卡片（含输入/输出明细）── */
+
+.usage-stat-cards {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 10px; margin-bottom: 14px;
+}
+.usage-stat-card {
+  background: var(--bg-card); border: 1px solid var(--border-card);
+  border-radius: var(--radius-md); padding: 12px 14px; text-align: center;
+}
+.usage-stat-value { font-size: 1.25rem; font-weight: 700; color: var(--text-h1); }
+.usage-stat-unit { font-size: 0.75rem; font-weight: 400; color: var(--text-tip); margin-left: 2px; }
+.usage-stat-label { font-size: 0.72rem; color: var(--text-tip); margin-top: 2px; }
+.usage-stat-detail {
+  margin-top: 6px; font-size: 0.68rem; display: flex; justify-content: center; gap: 10px;
+}
+.u-in { color: var(--primary); }
+.u-out { color: var(--accent); }
+
+/* ── 热力图：月份标签行 ── */
+
+.usage-heatmap-label {
+  font-size: 0.65rem; color: var(--text-tip); margin-bottom: 4px;
+}
+.usage-heat-labels {
+  display: grid; grid-template-columns: repeat(55, 1fr);
+  gap: 2px; margin-bottom: 2px; padding: 0 1px;
+}
+.usage-heat-label {
+  font-size: 0.52rem; color: var(--text-tip); text-align: left;
+  min-width: 0; overflow: visible; white-space: nowrap;
+}
+
+/* ── 热力图：格子网格 ── */
+
+.usage-heat-grid {
+  display: grid;
+  grid-template-columns: repeat(55, 1fr);
+  grid-template-rows: repeat(7, 1fr);
+  gap: 2px;
+  aspect-ratio: 55 / 7;
+  width: 100%;
+}
+
+.usage-heat-cell {
+  min-width: 0; min-height: 0;
+  border-radius: 2px;
+  cursor: default;
+  transition: outline var(--transition-fast);
+}
+.usage-heat-cell:hover {
+  outline: 2px solid var(--text-h1);
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+/* 空格子：统一偏白色调 + 浅内阴影，不使用过的格子与背景区分 */
+.usage-heat-cell.empty {
+  background: #eeedf3;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.07);
+}
+[data-theme="dark"] .usage-heat-cell.empty {
+  background: #2a2938;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+}
+
+/* 月份分隔列：左侧淡虚线，用半透明色避免与其他格不一致 */
+.usage-heat-cell.month-col {
+  border-left: 1px dashed;
+  border-left-color: color-mix(in srgb, var(--text-tip) 50%, transparent);
+}
+
+/* ── Tooltip（热力图用）── */
+
+.usage-tooltip {
+  position: fixed; z-index: 9999; pointer-events: none;
+  background: var(--text-h1); color: var(--bg-card);
+  font-size: 0.72rem; line-height: 1.5; padding: 5px 8px;
+  border-radius: 4px; white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 6px));
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* ── 柱状图容器（含 Y 轴）── */
+
+.usage-chart-wrap {
+  display: flex; gap: 0; margin-top: 14px;
+}
+
+.usage-y-axis {
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding-bottom: 18px; /* 对齐柱底（标签的高度） */
+  flex-shrink: 0; width: 40px;
+}
+.usage-y-tick {
+  font-size: 0.58rem; color: var(--text-tip); text-align: right;
+  padding-right: 4px; line-height: 1;
+}
+
+/* ── 柱状图 ── */
+
+.usage-bar-chart {
+  display: flex; align-items: flex-end; gap: 4px;
+  flex: 1; min-height: 305px;
+  border-bottom: 1px solid var(--border-card);
+  padding-bottom: 18px;
+  overflow-x: auto;
+}
+.usage-bar-chart::-webkit-scrollbar { height: 3px; }
+.usage-bar-chart::-webkit-scrollbar-thumb { background: var(--border-card); border-radius: 2px; }
+
+.usage-bar-col {
+  flex: 1 1 0; min-width: 12px; max-width: 40px;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-end; position: relative;
+}
+
+.usage-bar-stack {
+  width: 100%; max-width: 28px; display: flex; flex-direction: column;
+  justify-content: flex-end; cursor: pointer; position: relative;
+  border-radius: 3px 3px 0 0; overflow: hidden;
+}
+.usage-bar-stack:hover {
+  filter: brightness(0.9);
+}
+
+/* 输入在上（主题色），输出在下（酒红），拼接处无圆角，整体由 stack 的 overflow:hidden+radius 统一 */
+.usage-bar-in {
+  width: 100%; min-height: 0;
+  background: var(--primary); opacity: 0.85;
+}
+.usage-bar-out {
+  width: 100%; min-height: 0;
+  background: var(--accent); opacity: 0.85;
+}
+
+.usage-bar-label {
+  font-size: 0.52rem; color: var(--text-tip); margin-top: 3px;
+  white-space: nowrap; text-align: center;
+  position: absolute; bottom: -16px;
+}
+
+/* ── 柱状图浮层 tooltip（独立定位，不挤压柱子）── */
+
+.usage-bar-tooltip {
+  position: fixed; z-index: 9998; pointer-events: none;
+  background: var(--text-h1); color: var(--bg-card);
+  font-size: 0.72rem; line-height: 1.6; padding: 6px 10px;
+  border-radius: 6px; white-space: nowrap;
+  transform: translate(-50%, -100%);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+}
+
+/* ── 免责声明 ── */
+
+.usage-disclaimer {
+  font-size: 0.68rem; color: var(--text-tip); text-align: center;
+  margin-top: 14px; line-height: 1.6; opacity: 0.7;
+}
+

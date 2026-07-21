@@ -656,21 +656,20 @@ body {
   gap: 8px;
 }
 .toast {
-  padding: 12px 18px;
+  padding: 10px 16px;
   border-radius: var(--radius-md);
-  font-size: 0.85rem;
-  color: #fff;
+  font-size: 0.83rem;
+  color: var(--text-body);
   box-shadow: var(--shadow-lg);
   animation: slideInLeft 0.3s var(--ease-spring);
   max-width: 360px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  backdrop-filter: blur(12px);
+  border-left: 3px solid transparent;
 }
-.toast-info    { background: var(--info); }
-.toast-success { background: var(--primary-gradient); }
-.toast-error   { background: var(--accent-gradient); }
-.toast-warning { background: #d4902a; }
+.toast-info    { background: var(--bg-card); border-left-color: var(--primary); }
+.toast-success { background: var(--primary-light); border-left-color: var(--primary); }
+.toast-error   { background: var(--bg-card); border-left-color: var(--accent); }
+.toast-warning { background: var(--bg-card); border-left-color: #d4902a; }
 
 /* ===== 模态框 ===== */
 .modal-overlay {
